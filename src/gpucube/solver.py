@@ -73,9 +73,11 @@ class Solution:
 
 class GpuSolver:
     def __init__(self, table_path: Path, prefix_len: int = 4, grid: int = 36 * 8, block: int = 256,
-                 inverse: bool = True, collect_stats: bool = False, mode: str = "forward"):
-        """``mode``: "bidir" (block table only, bidirectional search) or
-        "forward" (mod-3 table for the axis frames, block table for inverses)."""
+                 inverse: bool = True, collect_stats: bool = False, mode: str = "forward",
+                 extra_tables: int = 2):
+        """``mode``: "forward" (mod-3 table for the axis frames, block table for
+        inverses), "multi" (block tables only: 208 plus ``extra_tables`` of
+        112 and 304), or "bidir" (208 block table, bidirectional search)."""
 
         import cupy as cp
 
@@ -84,8 +86,8 @@ class GpuSolver:
         self.dt = DeviceTables()
         n_entries = self.dt.n_classes * coords.N_EDGE
         n_words = (n_entries + 15) // 16
-        self.inverse = inverse or mode == "bidir"
-        if mode == "bidir":
+        self.inverse = inverse or mode in ("bidir", "multi")
+        if mode in ("bidir", "multi"):
             self.table = None
         else:
             self.table = load_device(table_path, n_words)
@@ -93,6 +95,12 @@ class GpuSolver:
             self.blk = load_device(table_path.with_name(f"{table_path.stem}-blk.bin"), block_words(n_entries))
         else:
             self.blk = self.table
+        self.extra = []
+        if mode == "multi":
+            for name in ("112", "304")[:extra_tables]:
+                kind = coords.EdgeKind.parse(name)
+                path = table_path.with_name(f"prune-ud-{name}-blk.bin")
+                self.extra.append((kind, load_device(path, block_words(self.dt.n_classes * kind.n_edge))))
         self.sconst = cp.asarray(np.frombuffer(search_const(), dtype=np.uint8))
         self.prefix_len = prefix_len
         self.prefixes = {k: cp.asarray(canonical_prefixes(k)) for k in range(prefix_len + 1)}
@@ -101,7 +109,10 @@ class GpuSolver:
         self.n_frames = 6 if self.inverse else 3
         # per-frame lookup counts [0:6], prune counts [8:14], children by budget 0,1,2,3+ [16:20]; slows the kernel
         self.stats = cp.zeros(24, dtype=cp.uint64) if collect_stats else None
-        self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
+        if mode == "multi":
+            self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
+        else:
+            self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
         self.k_block = mod.get_function("probe_block")
 
@@ -112,9 +123,15 @@ class GpuSolver:
         words = pack_states(np.stack([p[0] for p in packed]), np.stack([p[1] for p in packed]))
         n = len(all_frames)
         out = cp.zeros(n, dtype=cp.uint32)
-        if self.mode == "bidir":
+        if self.mode in ("bidir", "multi"):
+            d_words = cp.asarray(words)
             self.k_block(((n + 127) // 128,), (128,),
-                         (self.dt.tables, self.blk, self.dt.classidx, cp.asarray(words), np.int32(n), out))
+                         (self.dt.tables, self.blk, self.dt.classidx, d_words, np.int32(n), out))
+            for kind, blk in self.extra:
+                extra = cp.zeros(n, dtype=cp.uint32)
+                module(*kind.defines).get_function("probe_block")(
+                    ((n + 127) // 128,), (128,), (self.dt.tables, blk, self.dt.classidx, d_words, np.int32(n), extra))
+                out = cp.maximum(out, extra)
         else:
             self.k_root(((n + 127) // 128,), (128,),
                         (self.dt.tables, self.table, self.dt.classidx, cp.asarray(words), np.int32(n), out))
@@ -147,14 +164,19 @@ class GpuSolver:
             for plen, ids in groups.items():
                 counter.fill(0)
                 pre = self.prefixes[plen]
-                tables = (self.blk,) if self.mode == "bidir" else (self.table, self.blk)
-                self.k_search(
-                    (self.grid,), (self.block,),
-                    (self.dt.tables, self.sconst, *tables, self.dt.classidx, d_jobs,
-                     cp.asarray(np.array(ids, dtype=np.int32)), np.int32(len(ids)),
-                     pre, np.int32(len(pre)), np.int32(plen), counter,
-                     self.stats if self.stats is not None else np.uint64(0)),
-                )
+                if self.mode == "multi":
+                    xs = [blk for _, blk in self.extra] + [self.blk] * (2 - len(self.extra))
+                    tables = (self.blk, xs[0], xs[1])
+                elif self.mode == "bidir":
+                    tables = (self.blk,)
+                else:
+                    tables = (self.table, self.blk)
+                args = (self.dt.tables, self.sconst, *tables, self.dt.classidx, d_jobs,
+                        cp.asarray(np.array(ids, dtype=np.int32)), np.int32(len(ids)),
+                        pre, np.int32(len(pre)), np.int32(plen), counter)
+                if self.mode != "multi":
+                    args += (self.stats if self.stats is not None else np.uint64(0),)
+                self.k_search((self.grid,), (self.block,), args)
             cp.cuda.Device().synchronize()
             host_jobs = d_jobs.get().view(JOB_DTYPE)
             now = time.perf_counter() - t0

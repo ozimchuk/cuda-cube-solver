@@ -74,6 +74,27 @@ Per-depth entry counts match vcube's generator exactly at every depth.
   but is slower here: nodes fall only 5%, while every frame then needs a
   block lookup and back moves need left multiplication.
 
+**Things that did not pay off (measured on the 1,000 positions):**
+
+| Variant | Nodes/cube | Cubes/s |
+|---|---|---|
+| default (forward, inverse-frame inheritance) | 55.7 M | 19.0 |
+| forward frames from the block table instead of mod 3 | 56.6 M | 18.9 |
+| `--mode multi`: + `112` table (2.6 GB) | 42.1 M | 15.9 |
+| `--mode multi`: + `112` + `304` tables (4.0 GB) | 39.2 M | 12.1 |
+| prefix length 3 / 5 (default 4) | — | 17.3 / 16.1 |
+
+The extra tables (`gpucube build-table --kind 112|304`, both
+cross-checked against vcube's generator) raise the six-lookup average by
+0.11 and cut nodes by 31%, but only ~8% of children need them and a warp
+executes the extra index computations whenever any lane does, so the
+node rate falls faster than the node count.
+
+A larger table kept in host RAM and read by the GPU over PCIe is not
+viable on this machine: random reads from GPU kernels into pinned host
+memory reach ~60 M/s (`bench/gpu_host_gather.py`), versus 3,850 M/s
+from VRAM.
+
 **Where the time goes.** With every lookup forced into L2 the kernel is
 only ~13% faster than with real DRAM lookups, so it is balanced between
 memory and instruction issue. 99.6% of nodes have three or more moves of
@@ -92,6 +113,8 @@ python -m venv .venv
 .venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'
 
 .venv/bin/gpucube build-table               # writes tables/ (15 GB, ~2 min)
+.venv/bin/gpucube build-table --kind 112      # optional extra tables for --mode multi
+.venv/bin/gpucube build-table --kind 304
 echo "R U R' U' F2 D L2 B' R2 U F' L D2 R' B U2 F L'" | .venv/bin/gpucube solve
 .venv/bin/python bench/run_gpu.py data/random1000.txt --count 1000 --batch 100
 .venv/bin/pytest

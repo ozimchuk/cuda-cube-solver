@@ -12,6 +12,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="command", required=True)
     build = sub.add_parser("build-table", help="generate the pruning tables on the GPU (~2 min, 15 GB)")
     build.add_argument("--out", type=Path, default=Path("tables"))
+    build.add_argument("--kind", default="208", help="edge variant: 208 (default), 112, 304, ...")
     solve = sub.add_parser("solve", help="solve move-sequence scrambles, one per line on stdin")
     solve.add_argument("--table", type=Path, default=Path("tables/prune-ud-208.bin"))
     solve.add_argument("--batch", type=int, default=100)
@@ -19,9 +20,9 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     if args.command == "build-table":
-        from gpucube import table
+        from gpucube import coords, table
 
-        print(table.build(args.out))
+        print(table.build(args.out, coords.EdgeKind.parse(args.kind)))
         return
 
     from gpucube.cubie import MOVES_HTM, CubieState, apply_moves

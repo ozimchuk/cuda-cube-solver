@@ -8,8 +8,25 @@ typedef unsigned int u32;
 typedef unsigned long long u64;
 
 #define N_CCOMB 70u
-#define N_EDGE 3041280ull
 #define N_CORNER_RAW 153090u
+
+// Edge coordinate variant (vcube/nxopt naming): EP 1 = E-slice positions
+// only, 2 = plus the order of the E edges (4!), 3 = plus which non-E
+// positions hold U-layer edges (8C4); EO 4 = flips of the E edges, 8 = flips
+// of the non-E edges, 12 = all flips.  The default variant is "208".
+#ifndef EDGE_EP
+#define EDGE_EP 2
+#endif
+#ifndef EDGE_EO
+#define EDGE_EO 8
+#endif
+__host__ __device__ constexpr u32 n_ep(int ep) { return ep == 1 ? 1u : (ep == 2 ? 24u : 70u); }
+__host__ __device__ constexpr u32 n_eo(int eo) { return eo == 4 ? 16u : (eo == 8 ? 256u : 2048u); }
+template <int EP, int EO>
+struct EdgeKind {
+    static constexpr unsigned long long N = 495ull * n_ep(EP) * n_eo(EO);
+};
+#define N_EDGE (EdgeKind<EDGE_EP, EDGE_EO>::N)
 
 struct Tables {
     u32 c_sel[18][2];     // prmt selectors for corner bytes
@@ -121,10 +138,14 @@ __device__ __forceinline__ u32 labels8(u32 w) {
     return (v | (v >> 6) | (v >> 12) | (v >> 18)) & 0xFFu;
 }
 
+__device__ __forceinline__ u32 pext12(const Tables& T, u32 value, u32 mask) {
+    return T.pext6[mask & 63u][value & 63u] | ((u32)T.pext6[mask >> 6][(value >> 6) & 63u] << __popc(mask & 63u));
+}
+
 // Edge coordinate of M_sym g M_sym^-1, branch-free: permute positions and
 // relabel cubies with byte permutes, then read the coordinate with bit tricks.
-__device__ __forceinline__ u32 edge_coord(const Tables& T, const State& s, int sym) {
-#ifndef EDGE_COORD_LOOP
+template <int EP, int EO>
+__device__ __forceinline__ u32 edge_coord_k(const Tables& T, const State& s, int sym) {
     u32 e[3];
 #pragma unroll
     for (int w = 0; w < 3; ++w) {
@@ -137,39 +158,38 @@ __device__ __forceinline__ u32 edge_coord(const Tables& T, const State& s, int s
     u32 emask = m0 | (m1 << 4) | (m2 << 8);
     u32 omask = gather_bit(e[0], 4) | (gather_bit(e[1], 4) << 4) | (gather_bit(e[2], 4) << 8);
     u32 nm = ~emask & 0xFFFu;
-    u32 eo8 = T.pext6[nm & 63u][omask & 63u] | ((u32)T.pext6[nm >> 6][omask >> 6] << __popc(nm & 63u));
-    u32 n0 = __popc(m0), n1 = __popc(m1);
-    u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
-               ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
-    return ((u32)T.slice_rank[emask] * 24u + T.eorder_rank[eord]) * 256u + eo8;
-#else
-#ifdef PROBE_CHEAP_EDGE
-    return (s.e0 ^ (s.e1 * 3u) ^ (s.e2 * 7u) ^ (u32)sym) % (u32)N_EDGE;  // diagnostic only
-#endif
-    u32 emask = 0, eord = 0, eo8 = 0, ne = 0, no = 0;
-#pragma unroll
-    for (int i = 0; i < 12; ++i) {
-        u32 b = edge_byte(s, T.s_src[sym][i]);
-        u32 c = b & 15u;
-        u32 c2 = T.s_rel[sym][c];
-        u32 o = (b >> 4) ^ T.s_fsrc[sym][i] ^ T.s_fcub[sym][c];
-        if (c2 & 8u) {
-            emask |= 1u << i;
-            eord |= (c2 & 3u) << (2 * ne);
-            ++ne;
-        } else {
-            eo8 |= o << no;
-            ++no;
-        }
+    u32 ep = 0;
+    if (EP == 2) {
+        u32 n0 = __popc(m0), n1 = __popc(m1);
+        u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
+                   ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
+        ep = T.eorder_rank[eord];
+    } else if (EP == 3) {
+        // U-layer edges are cubies 0..3: bits 2 and 3 of the byte clear.
+        u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
+                    (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
+        ep = T.ccomb_rank[pext12(T, umask, nm)];
     }
-    return ((u32)T.slice_rank[emask] * 24u + T.eorder_rank[eord]) * 256u + eo8;
-#endif
+    u32 eo;
+    if (EO == 4) eo = pext12(T, omask, emask);
+    else if (EO == 8) eo = pext12(T, omask, nm);
+    else eo = omask & 0x7FFu;
+    return ((u32)T.slice_rank[emask] * n_ep(EP) + ep) * n_eo(EO) + eo;
+}
+
+__device__ __forceinline__ u32 edge_coord(const Tables& T, const State& s, int sym) {
+    return edge_coord_k<EDGE_EP, EDGE_EO>(T, s, sym);
+}
+
+template <int EP, int EO>
+__device__ __forceinline__ u64 table_index_k(const Tables& T, const u32* __restrict__ classidx, const State& s) {
+    u32 packed = classidx[corner_raw(T, s)];
+    return (u64)(packed >> 4) * EdgeKind<EP, EO>::N + edge_coord_k<EP, EO>(T, s, packed & 15u);
 }
 
 __device__ __forceinline__ u64 table_index(const Tables& T, const u32* __restrict__ classidx,
                                            const State& s) {
-    u32 packed = classidx[corner_raw(T, s)];
-    return (u64)(packed >> 4) * N_EDGE + edge_coord(T, s, packed & 15u);
+    return table_index_k<EDGE_EP, EDGE_EO>(T, classidx, s);
 }
 
 __device__ __forceinline__ u32 table_get(const u32* __restrict__ table, u64 idx) {
@@ -179,7 +199,9 @@ __device__ __forceinline__ u32 table_get(const u32* __restrict__ table, u64 idx)
     return (table[idx >> 4] >> ((idx & 15u) * 2u)) & 3u;
 }
 
+// Representative state of a table entry of the module's edge variant.
 __device__ void unrank(const Tables& T, const u32* __restrict__ class_rep, u64 idx, State& s) {
+    const u32 NEP = n_ep(EDGE_EP), NEO = n_eo(EDGE_EO);
     u32 cls = (u32)(idx / N_EDGE);
     u32 ecoord = (u32)(idx - (u64)cls * N_EDGE);
     u32 raw = class_rep[cls];
@@ -201,22 +223,27 @@ __device__ void unrank(const Tables& T, const u32* __restrict__ class_rep, u64 i
     }
     s.c0 = c[0] | (c[1] << 8) | (c[2] << 16) | (c[3] << 24);
     s.c1 = c[4] | (c[5] << 8) | (c[6] << 16) | (c[7] << 24);
-    u32 eo8 = ecoord & 255u;
-    u32 rest = ecoord >> 8;
-    u32 emask = T.slice_unrank[rest / 24u];
-    u32 eord = T.eorder_unrank[rest % 24u];
+    u32 eo = ecoord % NEO;
+    u32 rest = ecoord / NEO;
+    u32 ep = rest % NEP;
+    u32 emask = T.slice_unrank[rest / NEP];
+    u32 eord = EDGE_EP == 2 ? T.eorder_unrank[ep] : 0xE4u;  // identity order 0,1,2,3
+    u32 umask = EDGE_EP == 3 ? T.ccomb_unrank[ep] : 0x0Fu;  // non-E slots holding U edges
     u32 e[3] = {0, 0, 0};
-    u32 ne = 0, no = 0;
+    u32 ne = 0, no = 0, nu_e = 0, nd_e = 0;
     for (int i = 0; i < 12; ++i) {
-        u32 b;
+        u32 b, flip;
         if ((emask >> i) & 1u) {
             b = 8u | ((eord >> (2 * ne)) & 3u);
+            flip = EDGE_EO == 4 ? (eo >> ne) & 1u : 0u;
             ++ne;
         } else {
-            b = no | (((eo8 >> no) & 1u) << 4);
+            b = (umask >> no) & 1u ? nu_e++ : 4u + nd_e++;
+            flip = EDGE_EO == 8 ? (eo >> no) & 1u : 0u;
             ++no;
         }
-        e[i >> 2] |= b << ((i & 3) * 8);
+        if (EDGE_EO == 12) flip = i < 11 ? (eo >> i) & 1u : (u32)(__popc(eo) & 1);
+        e[i >> 2] |= (b | (flip << 4)) << ((i & 3) * 8);
     }
     s.e0 = e[0];
     s.e1 = e[1];
@@ -496,6 +523,11 @@ __device__ __forceinline__ u32 frame_lookup(const Tables& T, const u32* __restri
                                             const u32* __restrict__ blk,
                                             const u32* __restrict__ classidx, const State& s, int k,
                                             u32 parent) {
+#ifdef FORWARD_BLOCK
+    // Forward frames from the block table: parent - 1 stays a coset bound
+    // there because a right multiplication moves to an adjacent coset.
+    if (k < 3) return max(block_lb(blk, table_index(T, classidx, s)), parent ? parent - 1u : 0u);
+#endif
     return k < 3 ? lookup_exact(T, table, classidx, s, parent) : lookup_block(T, blk, classidx, s, parent);
 }
 
@@ -604,7 +636,7 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
 #pragma unroll
             for (int k = 0; k < NF; ++k) {
                 frame_do<NF>(T, S, f[k], k, m);
-                h[k] = frame_lookup(T, table, blk, classidx, f[k], k, h[k]);
+                if (k != 3 + (m / 3) % 3) h[k] = frame_lookup(T, table, blk, classidx, f[k], k, h[k]);
                 if (g + 1 + h[k] > bound) ok = false;
             }
             if (ok && all_axes_tight<NF>(h, bound - g - 1)) ok = false;
@@ -635,11 +667,14 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
                 ++st_budget[min(bound - g - 1u, 3u)];
                 u32 c[NF];
                 int pruned = NF;
+                // A move on axis a leaves inverse frame a in the same coset
+                // (the move becomes a U/D turn there, on the subgroup side).
+                const int inherit = 3 + (m / 3) % 3;
 #pragma unroll
                 for (int k = 0; k < NF; ++k) {
                     if (pruned == NF) {
                         frame_do<NF>(T, S, f[k], k, m);
-                        c[k] = frame_lookup(T, table, blk, classidx, f[k], k, h[k]);
+                        c[k] = k == inherit ? h[k] : frame_lookup(T, table, blk, classidx, f[k], k, h[k]);
                         ++st_look[k];
                         if (g + 1 + c[k] > bound) {
                             pruned = k;
@@ -885,3 +920,204 @@ search_bidir(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         atomicAdd(&job->nodes, nodes);
     }
 }
+
+// table_index(unrank(idx)) for a list of indices (validation; module's edge variant).
+extern "C" __global__ void probe_unrank(const Tables* __restrict__ gT, const u32* __restrict__ classidx,
+                                        const u32* __restrict__ class_rep, const u64* __restrict__ idx, int n,
+                                        u64* __restrict__ out) {
+    __shared__ Tables T;
+    load_tables(T, gT);
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    State s;
+    unrank(T, class_rep, idx[i], s);
+    out[i] = table_index(T, classidx, s);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-table search.  Every frame value is a coset lower bound from block
+// tables: the main "208" table for all six frames first, then, only for
+// children that survive it, the extra "112" and "304" tables.  Each table's
+// subgroup contains every U and D turn, so the axis rule and the inverse-frame
+// inheritance hold for the maximum over tables.
+
+template <int K>
+__device__ __forceinline__ u32 extra_lb(const Tables& T, const u32* __restrict__ classidx,
+                                        const u32* __restrict__ x112, const u32* __restrict__ x304, const State& s) {
+    return K == 0 ? block_lb(x112, table_index_k<1, 12>(T, classidx, s))
+                  : block_lb(x304, table_index_k<3, 4>(T, classidx, s));
+}
+
+// Which frames consult the extra tables.  All by default: restricting to
+// frames at the budget edge (EXTRA_EDGE_ONLY) loses most of the pruning,
+// which comes through the axis rule and jumps of two or more.
+#ifdef EXTRA_EDGE_ONLY
+#define EXTRA_FRAME_OK(value, budget) ((value) == (budget))
+#else
+#define EXTRA_FRAME_OK(value, budget) true
+#endif
+
+template <int NX>
+__device__ void search_multi_impl(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
+                                  const u32* __restrict__ blk, const u32* __restrict__ x112,
+                                  const u32* __restrict__ x304, const u32* __restrict__ classidx,
+                                  CubeJob* jobs, const int* __restrict__ active, int n_active,
+                                  const unsigned char* __restrict__ prefixes, int n_prefix, int prefix_len,
+                                  unsigned long long* work_counter) {
+    __shared__ Tables T;
+    __shared__ SearchConst S;
+    load_tables(T, gT);
+    {
+        const u32* src = reinterpret_cast<const u32*>(gS);
+        u32* dst = reinterpret_cast<u32*>(&S);
+        for (int i = threadIdx.x; i < (int)(sizeof(SearchConst) / 4); i += blockDim.x) dst[i] = src[i];
+        __syncthreads();
+    }
+    unsigned char path[MAX_DEPTH];
+    u32 hstack[MAX_DEPTH];
+    const unsigned long long total = (unsigned long long)n_active * n_prefix;
+
+    // Value of frame k after the move: main table, forward frames also never
+    // below parent - 1 (a right multiplication moves to an adjacent coset).
+    auto main_lb = [&](const State& s, int k, u32 parent) -> u32 {
+        u32 v = block_lb(blk, table_index(T, classidx, s));
+        if (k < 3 && parent) v = max(v, parent - 1u);
+        return v;
+    };
+
+    for (;;) {
+        unsigned long long w = atomicAdd(work_counter, 1ull);
+        if (w >= total) return;
+        int job_id = active[w / n_prefix];
+        CubeJob* job = &jobs[job_id];
+        if (*(volatile u32*)&job->found) continue;
+        const unsigned char* prefix = prefixes + (w % n_prefix) * prefix_len;
+        const u32 bound = job->bound;
+        State f[6];
+        u32 h[6];
+#pragma unroll
+        for (int k = 0; k < 6; ++k) {
+            f[k] = job->frame[k];
+            h[k] = job->h[k];
+        }
+        unsigned long long nodes = 0;
+        int g = 0;
+        int last = -1;
+        bool ok = true;
+        for (; g < prefix_len && ok; ++g) {
+            int m = prefix[g];
+            ++nodes;
+            if ((excluded_first_axes<6>(h, bound - g) >> ((m / 3) % 3)) & 1u) {
+                ok = false;
+                break;
+            }
+            const int inherit = 3 + (m / 3) % 3;
+#pragma unroll
+            for (int k = 0; k < 6; ++k) {
+                frame_do<6>(T, S, f[k], k, m);
+                if (k != inherit) {
+                    u32 v = main_lb(f[k], k, h[k]);
+                    if (NX > 0) v = max(v, extra_lb<0>(T, classidx, x112, x304, f[k]));
+                    if (NX > 1) v = max(v, extra_lb<1>(T, classidx, x112, x304, f[k]));
+                    h[k] = v;
+                }
+                if (g + 1 + h[k] > bound) ok = false;
+            }
+            if (ok && all_axes_tight<6>(h, bound - g - 1)) ok = false;
+            path[g] = (unsigned char)m;
+            last = m;
+        }
+        if (!ok) {
+            atomicAdd(&job->nodes, nodes);
+            continue;
+        }
+        const int base = g;
+        int next = 0;
+        u32 iter = 0;
+        for (;;) {
+            if ((++iter & 1023u) == 0 && *(volatile u32*)&job->found) break;
+            if ((u32)g == bound) {
+                if (is_solved(f[0]) && atomicCAS(&job->found, 0u, 1u) == 0u) {
+                    job->solution_length = g;
+                    for (int j = 0; j < g; ++j) job->solution[j] = path[j];
+                }
+                next = 18;
+            }
+            if (next < 18) {
+                int m = next++;
+                if (!S.allowed[last + 1][m]) continue;
+                if ((excluded_first_axes<6>(h, bound - g) >> ((m / 3) % 3)) & 1u) continue;
+                ++nodes;
+                const int inherit = 3 + (m / 3) % 3;
+                u32 c[6];
+                int pruned = 6;
+#pragma unroll
+                for (int k = 0; k < 6; ++k) {
+                    if (pruned == 6) {
+                        frame_do<6>(T, S, f[k], k, m);
+                        c[k] = k == inherit ? h[k] : main_lb(f[k], k, h[k]);
+                        if (g + 1 + c[k] > bound) pruned = k;
+                    }
+                }
+                if (NX > 0) {
+#pragma unroll
+                    for (int k = 0; k < 6; ++k) {
+                        if (pruned == 6 && k != inherit && EXTRA_FRAME_OK(c[k], bound - g - 1)) {
+                            c[k] = max(c[k], extra_lb<0>(T, classidx, x112, x304, f[k]));
+                            if (g + 1 + c[k] > bound) pruned = 5;
+                        }
+                    }
+                }
+                if (NX > 1) {
+#pragma unroll
+                    for (int k = 0; k < 6; ++k) {
+                        if (pruned == 6 && k != inherit && EXTRA_FRAME_OK(c[k], bound - g - 1)) {
+                            c[k] = max(c[k], extra_lb<1>(T, classidx, x112, x304, f[k]));
+                            if (g + 1 + c[k] > bound) pruned = 5;
+                        }
+                    }
+                }
+                if (pruned == 6 && all_axes_tight<6>(c, bound - g - 1)) pruned = 5;
+                if (pruned < 6) {
+#pragma unroll
+                    for (int k = 0; k < 6; ++k)
+                        if (k <= pruned) frame_undo<6>(T, S, f[k], k, m);
+                    continue;
+                }
+                u32 packed = 0;
+#pragma unroll
+                for (int k = 0; k < 6; ++k) {
+                    packed |= h[k] << (5 * k);
+                    h[k] = c[k];
+                }
+                hstack[g] = packed;
+                path[g] = (unsigned char)m;
+                last = m;
+                ++g;
+                next = 0;
+            } else {
+                if (g == base) break;
+                --g;
+                int m = path[g];
+#pragma unroll
+                for (int k = 0; k < 6; ++k) {
+                    frame_undo<6>(T, S, f[k], k, m);
+                    h[k] = (hstack[g] >> (5 * k)) & 31u;
+                }
+                next = m + 1;
+                last = g > 0 ? path[g - 1] : -1;
+            }
+        }
+        atomicAdd(&job->nodes, nodes);
+    }
+}
+
+#define MULTI_ARGS const Tables* __restrict__ gT, const SearchConst* __restrict__ gS, \
+    const u32* __restrict__ blk, const u32* __restrict__ x112, const u32* __restrict__ x304, \
+    const u32* __restrict__ classidx, CubeJob* jobs, const int* __restrict__ active, int n_active, \
+    const unsigned char* __restrict__ prefixes, int n_prefix, int prefix_len, unsigned long long* work_counter
+#define MULTI_PASS gT, gS, blk, x112, x304, classidx, jobs, active, n_active, prefixes, n_prefix, prefix_len, work_counter
+
+extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi0(MULTI_ARGS) { search_multi_impl<0>(MULTI_PASS); }
+extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi1(MULTI_ARGS) { search_multi_impl<1>(MULTI_PASS); }
+extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi2(MULTI_ARGS) { search_multi_impl<2>(MULTI_PASS); }

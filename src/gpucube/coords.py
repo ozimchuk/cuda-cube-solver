@@ -34,6 +34,46 @@ N_EO8 = 256
 N_EDGE = N_SLICE * N_EORDER * N_EO8
 
 
+@dataclass(frozen=True)
+class EdgeKind:
+    """Edge coordinate variant, named like vcube/nxopt tables ("208", "112", "304").
+
+    ``ep``: 1 = E-slice positions only, 2 = plus the order of the E edges,
+    3 = plus which non-E positions hold U-layer edges.  ``eo``: 4 = flips of
+    the E edges, 8 = flips of the non-E edges, 12 = all flips.
+    """
+
+    ep: int
+    eo: int
+
+    @property
+    def n_ep(self) -> int:
+        return {1: 1, 2: 24, 3: 70}[self.ep]
+
+    @property
+    def n_eo(self) -> int:
+        return {4: 16, 8: 256, 12: 2048}[self.eo]
+
+    @property
+    def n_edge(self) -> int:
+        return N_SLICE * self.n_ep * self.n_eo
+
+    @property
+    def name(self) -> str:
+        return f"{self.ep}{self.eo:02d}"
+
+    @property
+    def defines(self) -> tuple[str, ...]:
+        return (f"EDGE_EP={self.ep}", f"EDGE_EO={self.eo}")
+
+    @classmethod
+    def parse(cls, name: str) -> "EdgeKind":
+        return cls(int(name[0]), int(name[1:]))
+
+
+K208 = EdgeKind(2, 8)
+
+
 def _combination_tables(bits: int, choose: int):
     rank = np.full(1 << bits, 0xFFFF, dtype=np.uint16)
     unrank = []
@@ -73,25 +113,34 @@ def corner_raw(corners: np.ndarray) -> np.ndarray:
     return twist * N_CCOMB + CCOMB_RANK[dmask].astype(np.int64)
 
 
-def edge_coord(edges: np.ndarray) -> np.ndarray:
+def edge_coord(edges: np.ndarray, kind: EdgeKind = K208) -> np.ndarray:
     """Edge coordinate for packed edges of shape (..., 12)."""
 
     edges = np.asarray(edges)
     flat = edges.reshape(-1, 12)
     out = np.empty(len(flat), dtype=np.int64)
     for row, e in enumerate(flat):
-        emask = eorder = eo8 = 0
+        emask = eorder = umask = eo_e = eo_n = 0
         ecount = ocount = 0
         for i in range(12):
             b = int(e[i])
             if b & 8:
                 emask |= 1 << i
                 eorder |= (b & 3) << (2 * ecount)
+                eo_e |= (b >> 4) << ecount
                 ecount += 1
             else:
-                eo8 |= (b >> 4) << ocount
+                umask |= int((b & 15) < 4) << ocount
+                eo_n |= (b >> 4) << ocount
                 ocount += 1
-        out[row] = (int(SLICE_RANK[emask]) * N_EORDER + int(EORDER_RANK[eorder])) * N_EO8 + eo8
+        ep = {1: 0, 2: int(EORDER_RANK[eorder]), 3: int(CCOMB_RANK[umask])}[kind.ep]
+        if kind.eo == 4:
+            eo = eo_e
+        elif kind.eo == 8:
+            eo = eo_n
+        else:
+            eo = sum(((int(e[i]) >> 4) & 1) << i for i in range(11))
+        out[row] = (int(SLICE_RANK[emask]) * kind.n_ep + ep) * kind.n_eo + eo
     return out.reshape(edges.shape[:-1])
 
 
@@ -109,20 +158,31 @@ def corners_from_raw(raw: np.ndarray) -> np.ndarray:
     return (cp | (co << 3)).astype(np.uint8)
 
 
-def edges_from_coord(coord: int) -> np.ndarray:
-    rest, eo8 = divmod(int(coord), N_EO8)
-    srank, orank = divmod(rest, N_EORDER)
+def edges_from_coord(coord: int, kind: EdgeKind = K208) -> np.ndarray:
+    """Representative packed edges; matches the GPU ``unrank``."""
+
+    rest, eo = divmod(int(coord), kind.n_eo)
+    srank, ep = divmod(rest, kind.n_ep)
     emask = int(SLICE_UNRANK[srank])
-    eorder = int(EORDER_UNRANK[orank])
+    eorder = int(EORDER_UNRANK[ep]) if kind.ep == 2 else 0xE4
+    umask = int(CCOMB_UNRANK[ep]) if kind.ep == 3 else 0x0F
     edges = np.zeros(12, dtype=np.uint8)
-    ecount = ocount = 0
+    ecount = ocount = n_u = n_d = 0
     for i in range(12):
         if emask >> i & 1:
-            edges[i] = 8 | ((eorder >> (2 * ecount)) & 3)
+            b = 8 | ((eorder >> (2 * ecount)) & 3)
+            flip = (eo >> ecount) & 1 if kind.eo == 4 else 0
             ecount += 1
         else:
-            edges[i] = ocount | (((eo8 >> ocount) & 1) << 4)
+            if umask >> ocount & 1:
+                b, n_u = n_u, n_u + 1
+            else:
+                b, n_d = 4 + n_d, n_d + 1
+            flip = (eo >> ocount) & 1 if kind.eo == 8 else 0
             ocount += 1
+        if kind.eo == 12:
+            flip = (eo >> i) & 1 if i < 11 else bin(eo).count("1") & 1
+        edges[i] = b | (flip << 4)
     return edges
 
 
@@ -220,12 +280,12 @@ def corner_classes() -> CornerClasses:
     return CornerClasses(classidx, reps.astype(np.uint32), stab.astype(np.uint16))
 
 
-def table_index(corners: np.ndarray, edges: np.ndarray) -> int:
+def table_index(corners: np.ndarray, edges: np.ndarray, kind: EdgeKind = K208) -> int:
     cc = corner_classes()
     _, edge_syms = ud_actions()
     packed = int(cc.classidx[int(corner_raw(corners))])
     cls, s = packed >> 4, packed & 15
-    return cls * N_EDGE + int(edge_coord(conj_edges(edges, edge_syms[s])))
+    return cls * kind.n_edge + int(edge_coord(conj_edges(edges, edge_syms[s]), kind))
 
 
 def apply_move(corners: np.ndarray, edges: np.ndarray, move: int):
