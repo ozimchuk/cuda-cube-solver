@@ -181,6 +181,41 @@ __device__ __forceinline__ u32 edge_coord(const Tables& T, const State& s, int s
     return edge_coord_k<EDGE_EP, EDGE_EO>(T, s, sym);
 }
 
+// Table index for variant kind 0 = "208", 1 = "112", 2 = "304" chosen at run
+// time: the conjugation and masks are shared, only the extraction differs.
+#define N_EDGE_208 (EdgeKind<2, 8>::N)
+#define N_EDGE_112 (EdgeKind<1, 12>::N)
+#define N_EDGE_304 (EdgeKind<3, 4>::N)
+__device__ __forceinline__ u64 table_index_any(const Tables& T, const u32* __restrict__ classidx,
+                                               const State& s, int kind) {
+    u32 packed = classidx[corner_raw(T, s)];
+    int sym = packed & 15u;
+    u32 e[3];
+#pragma unroll
+    for (int w = 0; w < 3; ++w) {
+        u32 x = __byte_perm(s.e0, s.e1, T.cs_sel01[sym][w]);
+        u32 y = __byte_perm(s.e2, s.e2, T.cs_sel2[sym][w]);
+        u32 v = ((x & ~T.cs_mask[sym][w]) | (y & T.cs_mask[sym][w])) ^ T.cs_flip[sym][w];
+        e[w] = relabel_word(v, T.cs_rel[sym][0], T.cs_rel[sym][1], T.cs_rel[sym][2]);
+    }
+    u32 m0 = gather_bit(e[0], 3), m1 = gather_bit(e[1], 3), m2 = gather_bit(e[2], 3);
+    u32 emask = m0 | (m1 << 4) | (m2 << 8);
+    u32 omask = gather_bit(e[0], 4) | (gather_bit(e[1], 4) << 4) | (gather_bit(e[2], 4) << 8);
+    u32 nm = ~emask & 0xFFFu;
+    u32 slice = T.slice_rank[emask];
+    u64 cls = packed >> 4;
+    if (kind == 0) {
+        u32 n0 = __popc(m0), n1 = __popc(m1);
+        u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
+                   ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
+        return cls * N_EDGE_208 + (slice * 24u + T.eorder_rank[eord]) * 256u + pext12(T, omask, nm);
+    }
+    if (kind == 1) return cls * N_EDGE_112 + slice * 2048u + (omask & 0x7FFu);
+    u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
+                (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
+    return cls * N_EDGE_304 + (slice * 70u + T.ccomb_rank[pext12(T, umask, nm)]) * 16u + pext12(T, omask, emask);
+}
+
 template <int EP, int EO>
 __device__ __forceinline__ u64 table_index_k(const Tables& T, const u32* __restrict__ classidx, const State& s) {
     u32 packed = classidx[corner_raw(T, s)];
@@ -1206,11 +1241,18 @@ __device__ __forceinline__ u32 frame_order(const u32* h, u32 edge) {
     return at | (below << 6) | ((~(at | below) & 0x3Fu) << 12);
 }
 
+// Extra-table steps follow the main ones: bits 18..23 for "112", 24..29 for
+// "304", one per frame.  next_frame returns frame + 8 * table (6 = done).
+#ifndef STEP_EXTRA
+#define STEP_EXTRA 0
+#endif
+#define EXTRA_STEP_MASKS (STEP_EXTRA >= 1 ? (0x3Fu << 18) : 0u) | (STEP_EXTRA >= 2 ? (0x3Fu << 24) : 0u)
+
 __device__ __forceinline__ int next_frame(u32& rem) {
     if (!rem) return 6;
     int b = __ffs(rem) - 1;
     rem &= rem - 1;
-    return b % 6;
+    return b < 18 ? b % 6 : ((b - 18) % 6) + 8 * (1 + (b - 18) / 6);
 }
 
 __device__ __forceinline__ State pick_state(const State* f, int k) {
@@ -1234,6 +1276,7 @@ __device__ __forceinline__ u32 pick_u32(const u32* v, int k) {
 extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS)
 search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
             const u32* __restrict__ table, const u32* __restrict__ blk,
+            const u32* __restrict__ x112, const u32* __restrict__ x304,
             const u32* __restrict__ classidx, CubeJob* jobs, const int* __restrict__ active, int n_active,
             const unsigned char* __restrict__ prefixes, int n_prefix, int prefix_len,
             unsigned long long* work_counter, unsigned long long* stats) {
@@ -1281,7 +1324,7 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         bool eval = false;
         while (!done) {
             if (m >= 0) {
-                if (k < 6) {
+                if (k != 6 && k != 7) {  // still evaluating
                     eval = true;
                     break;
                 }
@@ -1344,6 +1387,8 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
 #ifdef STEP_ALL_BLOCK
                         if (j != 3 + (pm / 3) % 3) {
                             u32 v = block_lb(blk, table_index(T, classidx, f[j]));
+                            if (STEP_EXTRA >= 1) v = max(v, block_lb(x112, table_index_any(T, classidx, f[j], 1)));
+                            if (STEP_EXTRA >= 2) v = max(v, block_lb(x304, table_index_any(T, classidx, f[j], 2)));
                             h[j] = (j < 3 && h[j]) ? max(v, h[j] - 1u) : v;
                         }
 #else
@@ -1377,9 +1422,10 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                 m = __ffs(todo) - 1;
                 todo &= todo - 1;
                 ++nodes;
-                rem = ord;
-                k = next_frame(rem);
                 inherit = 3 + (m / 3) % 3;
+                c[inherit] = h[inherit];  // same coset in every table: no lookups
+                rem = (ord | EXTRA_STEP_MASKS) & ~(0x41041u << inherit);
+                k = next_frame(rem);
                 eval = true;
                 break;
             }
@@ -1407,25 +1453,30 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
 #ifdef LANE_STATS
         lane_sample(lane_acc, 0);
 #endif
-        if (k == inherit) {  // inherited value: no lookup, move on to the next frame
-            c[inherit] = h[inherit];
-            k = next_frame(rem);
-            if (k == 6) continue;
-        }
-        u32 parent = pick_u32(h, k);
+        const int fr = k & 7, tbl = k >> 3;
+        u32 parent = pick_u32(h, fr);
         u32 v = parent;
         {
-            State t = pick_state(f, k);
-            int mk = S.frame_move[k < 3 ? k : k - 3][m];
-            if (k < 3) apply_move(T, t, mk);
+            State t = pick_state(f, fr);
+            int mk = S.frame_move[fr < 3 ? fr : fr - 3][m];
+            if (fr < 3) apply_move(T, t, mk);
             else apply_left(T, t, inverse_move(mk));
-            // One index computation for both frame kinds; only the decode differs.
-            u64 idx = table_index(T, classidx, t);
 #ifdef STEP_ALL_BLOCK
-            // One table for every frame; forward frames also never below parent - 1.
-            v = block_lb(blk, idx);
-            if (k < 3 && parent) v = max(v, parent - 1u);
+            // Block tables for every frame.  The main table comes first; forward
+            // frames are also never below parent - 1; extra tables raise the value.
+            if (STEP_EXTRA == 0) {
+                v = block_lb(blk, table_index(T, classidx, t));
+            } else {
+                const u32* tb = tbl == 0 ? blk : (tbl == 1 ? x112 : x304);
+                v = block_lb(tb, table_index_any(T, classidx, t, tbl));
+            }
+            if (tbl == 0) {
+                if (fr < 3 && parent) v = max(v, parent - 1u);
+            } else {
+                v = max(v, pick_u32(c, fr));
+            }
 #else
+            u64 idx = table_index(T, classidx, t);
             if (k < 3) {
                 u32 cm = table_get(table, idx);
                 u32 r = (cm + 3u - parent % 3u) % 3u;
@@ -1437,7 +1488,7 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         }
 #pragma unroll
         for (int j = 0; j < 6; ++j) {
-            if (j == k) c[j] = v;
+            if (j == fr) c[j] = v;
         }
         k = (g + 1 + v > bound) ? 7 : next_frame(rem);
     }

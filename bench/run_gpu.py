@@ -18,11 +18,12 @@ def main():
     ap.add_argument("--no-inverse", action="store_true")
     ap.add_argument("--mode", default="step", choices=["step", "forward", "multi", "bidir"])
     ap.add_argument("--extra", type=int, default=2, help="multi mode: number of extra tables (0-2)")
-    ap.add_argument("--grid", type=int, default=36 * 8)
+    ap.add_argument("--step-extra", type=int, default=0, help="step mode: number of extra tables (0-2)")
+    ap.add_argument("--grid", type=int, default=None, help="blocks (default: 8 per SM)")
     args = ap.parse_args()
     lines = args.scrambles.read_text().splitlines()[: args.count]
     states = [apply_moves(CubieState(), [MOVES_HTM[m] for m in parse_moves(l)]) for l in lines]
-    solver = GpuSolver(args.table, prefix_len=args.prefix, inverse=not args.no_inverse, mode=args.mode, grid=args.grid, extra_tables=args.extra)
+    solver = GpuSolver(args.table, prefix_len=args.prefix, inverse=not args.no_inverse, mode=args.mode, grid=args.grid, extra_tables=args.extra, step_extra=args.step_extra)
     out = []
     t = time.perf_counter()
     nodes = 0

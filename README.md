@@ -2,9 +2,9 @@
 
 An optimal half-turn-metric Rubik's cube solver that keeps its pattern
 database in GPU memory and runs IDA* on the GPU. On a desktop with an
-RTX 5060 Ti 16 GB it solves random positions 2.5× faster than vcube and
-3.1× faster than nxopt (the two fastest open CPU optimal solvers) on the
-same machine, with a smaller table.
+RTX 5060 Ti 16 GB it solves random positions 3.7× faster than vcube and
+4.7× faster than nxopt (the two fastest open CPU optimal solvers) on the
+same machine, with a table a third of their size.
 
 ## Results
 
@@ -17,8 +17,7 @@ excluded for every solver).
 |---|---|---|---|
 | nxopt `EO2,EP3` (`nxopt23`), g++ `-O3 -march=native`, 12 threads | 22.7 GB RAM | 166.3 s | 6.01 |
 | vcube `308`, clang 22 `-O3`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 |
-| **gpucube** (forward mode) | 15.3 GB VRAM | 52.9 s | **18.9** |
-| gpucube (bidirectional mode) | 7.8 GB VRAM | 66.8 s | 15.0 |
+| **gpucube** (default `step` mode) | 7.8 GB VRAM | 35.7 s | **28.0** |
 
 All solvers return identical optimal lengths on all 1,000 positions
 (3× 15, 27× 16, 278× 17, 659× 18, 33× 19). Raw outputs are in `data/`.
@@ -95,12 +94,47 @@ viable on this machine: random reads from GPU kernels into pinned host
 memory reach ~60 M/s (`bench/gpu_host_gather.py`), versus 3,850 M/s
 from VRAM.
 
-**Where the time goes.** With every lookup forced into L2 the kernel is
+**Development history (same 1,000 positions, cubes/s):** three axis
+frames 7.8 → + inverse frames and block table 9.3 → branch-free edge
+conjugation 9.6 → coset axis rule 18.9 → inverse-frame inheritance 19.0
+→ per-node move masks (lookup-lane efficiency 22% → 45%) 23.7 →
+step-machine kernel with per-node frame order, block table only (lane
+efficiency 99%, half the VRAM) 28.0.
+
+**Step machine.** Each warp iteration, every lane performs exactly one
+table lookup for its current child; choosing moves, push, pop and
+fetching work run between steps. The child is evaluated on a temporary
+copy of the frame, so a pruned child needs no undo. Frames are taken in
+a per-node order (frames at the budget edge first), encoded as three
+6-bit masks. The search is then bound by DRAM random-access throughput
+(~2.5 lookups per child at ~1.5 G children/s ≈ 3.7 G lookups/s against
+a measured ceiling of 3.85 G/s).
+
+Extra tables in the step machine (`--step-extra 1|2`) cut nodes by 30%
+but nearly double lookup steps per child (2.5 → 4.8): with the axis rule
+removing most easily pruned moves up front, ~46% of the remaining
+children survive all six main lookups and then pay five more per extra
+table. Net loss (18.4 / 13.8 cubes/s).
+
+**Where the time goes (forward kernel, before the step machine).** With every lookup forced into L2 the kernel is
 only ~13% faster than with real DRAM lookups, so it is balanced between
 memory and instruction issue. 99.6% of nodes have three or more moves of
 budget left: the search lives in the top ~8 levels and is bounded by
 table information, which 16 GB of VRAM caps at this table size (the next
 size, nxopt `EO2,EP3`, needs ~23 GB).
+
+## Portability
+
+- Any NVIDIA GPU of the Pascal generation (sm_61) or newer; kernels are
+  compiled at run time for the installed device (NVRTC via CuPy). The
+  launch grid scales with the SM count.
+- Solving needs ≈ 9 GB of VRAM (7.8 GB block table). Generating the
+  tables needs 16 GB (the BFS holds both encodings); on smaller cards,
+  copy prebuilt tables.
+- Only measured on an RTX 5060 Ti. The search is balanced between random
+  memory access and instruction issue, so throughput should scale with
+  both; cards with 24–32 GB could hold nxopt's next table size
+  (`EO2,EP3`, 22.7 GB), which needs ~2.3× fewer nodes on CPUs.
 
 ## Usage
 

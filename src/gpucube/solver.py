@@ -72,9 +72,9 @@ class Solution:
 
 
 class GpuSolver:
-    def __init__(self, table_path: Path, prefix_len: int = 4, grid: int = 36 * 8, block: int = 256,
+    def __init__(self, table_path: Path, prefix_len: int = 4, grid: int | None = None, block: int = 256,
                  inverse: bool = True, collect_stats: bool = False, mode: str = "step",
-                 extra_tables: int = 2):
+                 extra_tables: int = 2, step_extra: int = 0):
         """``mode``: "step" (default: step-machine kernel, block table only),
         "forward" (mod-3 table for the axis frames, block table for inverses),
         "multi" (block tables only: 208 plus ``extra_tables`` of 112 and 304),
@@ -97,15 +97,18 @@ class GpuSolver:
         else:
             self.blk = self.table
         self.extra = []
-        if mode == "multi":
-            for name in ("112", "304")[:extra_tables]:
+        if mode in ("multi", "step"):
+            n_extra = extra_tables if mode == "multi" else step_extra
+            for name in ("112", "304")[:n_extra]:
                 kind = coords.EdgeKind.parse(name)
                 path = table_path.with_name(f"prune-ud-{name}-blk.bin")
                 self.extra.append((kind, load_device(path, block_words(self.dt.n_classes * kind.n_edge))))
         self.sconst = cp.asarray(np.frombuffer(search_const(), dtype=np.uint8))
         self.prefix_len = prefix_len
         self.prefixes = {k: cp.asarray(canonical_prefixes(k)) for k in range(prefix_len + 1)}
-        self.grid, self.block = grid, block
+        # Persistent kernel: 8 blocks per SM is enough to keep every SM fed on any device.
+        sms = cp.cuda.Device().attributes["MultiProcessorCount"]
+        self.grid, self.block = grid or 8 * sms, block
         mod = module()
         self.n_frames = 6 if self.inverse else 3
         # per-frame lookup counts [0:6], prune counts [8:14], children by budget 0,1,2,3+ [16:20]; slows the kernel
@@ -113,7 +116,7 @@ class GpuSolver:
         if mode == "multi":
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
         elif mode == "step":
-            self.k_search = module("STEP_ALL_BLOCK").get_function("search_step")
+            self.k_search = module("STEP_ALL_BLOCK", f"STEP_EXTRA={len(self.extra)}").get_function("search_step")
         else:
             self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
@@ -173,7 +176,8 @@ class GpuSolver:
                 elif self.mode == "bidir":
                     tables = (self.blk,)
                 elif self.mode == "step":
-                    tables = (self.blk, self.blk)
+                    xs = [blk for _, blk in self.extra] + [self.blk] * (2 - len(self.extra))
+                    tables = (self.blk, self.blk, xs[0], xs[1])
                 else:
                     tables = (self.table, self.blk)
                 args = (self.dt.tables, self.sconst, *tables, self.dt.classidx, d_jobs,
