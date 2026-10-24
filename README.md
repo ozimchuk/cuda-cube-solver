@@ -1,9 +1,12 @@
 # cuda-cube-solver — optimal 3×3 solving on the GPU
 
-An optimal half-turn-metric Rubik's cube solver that keeps its pattern
-database in GPU memory and runs IDA* on the GPU. On a desktop with an
-RTX 5060 Ti 16 GB, against the two fastest open CPU optimal solvers on
-the same machine:
+Finds the **shortest possible solution** of a Rubik's cube (optimal in
+the half-turn metric, where a half turn such as `U2` counts as one move;
+random positions need 16–19 moves) on an NVIDIA GPU. It keeps a 7.3 GiB
+pattern database in GPU memory and runs IDA* search on the GPU.
+
+On a desktop with an RTX 5060 Ti 16 GB, against the two fastest open CPU
+optimal solvers on the same machine:
 
 - **one cube at a time: ~30× faster than vcube, ~40× faster than nxopt**
   (median 23 ms per random position versus 0.76 s and 0.98 s);
@@ -12,7 +15,72 @@ the same machine:
 
 with a table a third the size of theirs (7.8 GB versus 21–23 GB).
 
-The Python package is `cuda_cube_solver`; the command is `cuda-cube-solver`.
+## Requirements
+
+| | To solve | To build the table (once) |
+|---|---|---|
+| NVIDIA GPU | Turing (RTX 20-series) or newer, ≥ 9 GB VRAM | ≥ 16 GB VRAM |
+| Disk | 7.3 GiB (`prune-ud-208-blk.bin`) | 14.3 GiB for both table files |
+| Host RAM | ~2 GB | ~2 GB |
+
+- Linux, Python ≥ 3.11, an NVIDIA driver supporting CUDA 13 (R580 or
+  newer), CuPy 14. Developed and measured only on an RTX 5060 Ti (16 GB)
+  under Ubuntu.
+- Building the table takes about 2 minutes on that card. Cards with less
+  than 16 GB can solve with a table built elsewhere (copy
+  `prune-ud-208-blk.bin`); see [8 GB cards](docs/future-work.md#1-supporting-8-gb-cards)
+  for options under consideration.
+
+## Quick start
+
+```bash
+git clone https://gitlab.com/ozimchuk/cuda-cube-solver.git
+cd cuda-cube-solver
+python3 -m venv .venv
+.venv/bin/pip install -e '.[test]'
+# CuPy also needs CUDA headers if no CUDA toolkit is installed system-wide:
+.venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'
+
+.venv/bin/cuda-cube-solver build-table      # writes tables/ (~2 min, 16 GB VRAM)
+```
+
+Solve a scramble (the cube it produces from solved), a 54-sticker
+facelet string, or a whole file — one cube per line on stdin:
+
+```bash
+echo "R U R' U' F2 D L2 B' R2 U F' L D2 R' B U2 F L'" | .venv/bin/cuda-cube-solver solve
+# 1 17 F L F2 D2 L2 B R' U' F U B' L' B2 R D' R2 D2
+
+echo "DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD" | .venv/bin/cuda-cube-solver solve
+# 1 18 R2 D2 R' F U2 R' B' D' R U2 F R' D' R' U2 L2 F B2
+
+.venv/bin/cuda-cube-solver solve < cubes.txt > solutions.txt
+```
+
+- **Output:** `<line number> <length> <moves>` per cube, in input order;
+  applying `<moves>` to the cube solves it. Invalid lines print
+  `<line number> error <reason>` (e.g. a twisted corner) and the rest
+  still run. Several optimal solutions usually exist, and repeated runs
+  may return a different one of the same length.
+- **Facelet strings** use the common U R F D L B face order (as in the
+  `kociemba` package and Cube Explorer); any six symbols work, since the
+  centres define the faces, so colour letters such as `W G R …` are fine.
+- **Startup:** each invocation loads the table (1–5 s) before solving,
+  so pipe many cubes into one run rather than calling it per cube.
+- `cuda-cube-solver solve --help` lists the options; the table location
+  defaults to `tables/` and can be changed with `--table`.
+
+From Python:
+
+```python
+from pathlib import Path
+from cuda_cube_solver.facelets import parse_facelets
+from cuda_cube_solver.solver import GpuSolver
+
+solver = GpuSolver(Path("tables/prune-ud-208.bin"))   # loads the -blk.bin table
+solution = solver.solve([parse_facelets("DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD")])[0]
+print(len(solution.moves), solution.text())
+```
 
 ## Comparison with vcube and nxopt
 
@@ -85,138 +153,62 @@ Raw outputs: `data/single_cube/`.
 
 ## How it works
 
-**Why a GPU.** Optimal IDA* is bound by random lookups into a large
-table. Measured on this host (`bench/cpu_gather.c`, `bench/gpu_gather.py`):
-0.71–0.75 G random byte lookups/s on 12 CPU threads versus 3.85 G/s on
-the GPU.
+**Why a GPU.** An optimal solver is limited by random lookups into a
+large table. Measured on this machine (`bench/cpu_gather.c`,
+`bench/gpu_gather.py`): 0.71–0.75 G random lookups/s on 12 CPU threads
+versus 3.85 G/s on the GPU.
 
 **Table.** An independent implementation of the coset coordinate used by
 nxopt (`EO2,EP2`) and vcube (`208`): corner twist × which positions hold
-U-layer corners, reduced by the 16 UD-preserving symmetries (9,930
-classes); E-slice positions × order of the E edges × flips of the eight
-non-E edges. 30,199,910,400 entries. One GPU BFS (≈2 minutes) writes two
-encodings:
+U-layer corners, reduced by the 16 symmetries that keep the U–D axis
+(9,930 classes); E-slice edge positions × their order × flips of the
+other eight edges. 30,199,910,400 entries. One GPU breadth-first search
+(≈ 2 minutes) writes `prune-ud-208-blk.bin` (7.3 GiB, used for solving:
+per 32-byte memory sector an 8-bit minimum and 124 two-bit offsets,
+exact for 99.6% of entries) and `prune-ud-208.bin` (7.0 GiB, distances
+mod 3, used during generation and by experimental modes). Per-depth entry
+counts match vcube's generator exactly.
 
-- `prune-ud-208.bin` (7.03 GiB): distance mod 3. Along a path of right
-  multiplications the coset distance changes by at most one, so exact
-  values are tracked from the root.
-- `prune-ud-208-blk.bin` (7.26 GiB): per 32-byte sector an 8-bit minimum
-  and 124 two-bit offsets. Absolute coset lower bounds in one memory
-  transaction; exact for 99.6% of positions.
+**Search.** IDA* with six lookups per position: the position turned so
+each of its three axes becomes the U–D axis, and the inverse of each. A
+coset rule from nxopt's documentation, re-derived for this table, uses
+those lookups to exclude whole axes of first moves and to add one to the
+bound when all three axes agree. Each cube is split into 43,254 work
+items (one per canonical 4-move start), so a single cube already fills
+the GPU; many cubes can be searched together. In the kernel every lane
+does exactly one table lookup per step, and moves and symmetry
+conjugation are byte-permute (`prmt`) instructions on a packed state.
 
-Per-depth entry counts match vcube's generator exactly at every depth.
-
-**Search.**
-
-- Six lookups per node: the position conjugated onto the UD, RL and FB
-  axes, and the inverse of each (the inverse evolves by left
-  multiplication, so it uses the block table).
-- Coset axis rule (from nxopt's documentation, re-derived here): the
-  table's subgroup contains every U and D turn, so a shortest coset
-  representative never ends in U or D. An inverse frame whose bound
-  equals the remaining budget excludes first moves on its axis; three
-  tight forward (or inverse) frames prune the node. The bound must be the
-  coset distance itself — mixing in the true-distance bound `parent − 1`
-  breaks the rule.
-- Packed state: corners in two 32-bit words, edges in three. Moves,
-  inverse (left) moves and symmetry conjugation are `prmt` byte permutes;
-  the edge coordinate is read with bit tricks and small shared-memory
-  tables, no loops.
-- Work items are (cube, canonical 4-move prefix); a persistent kernel
-  pulls items with an atomic counter; many cubes are searched at once.
-- Bidirectional mode (`--mode bidir`) also extends the solution from
-  whichever end has fewer allowed moves and inherits one lookup from the
-  parent, as nxopt does. It needs only the block table (half the VRAM)
-  but is slower here: nodes fall only 5%, while every frame then needs a
-  block lookup and back moves need left multiplication.
-
-**Things that did not pay off (measured on the 1,000 positions):**
-
-| Variant | Nodes/cube | Cubes/s |
-|---|---|---|
-| default (forward, inverse-frame inheritance) | 55.7 M | 19.0 |
-| forward frames from the block table instead of mod 3 | 56.6 M | 18.9 |
-| `--mode multi`: + `112` table (2.6 GB) | 42.1 M | 15.9 |
-| `--mode multi`: + `112` + `304` tables (4.0 GB) | 39.2 M | 12.1 |
-| prefix length 3 / 5 (default 4) | — | 17.3 / 16.1 |
-
-The extra tables (`cuda-cube-solver build-table --kind 112|304`, both
-cross-checked against vcube's generator) raise the six-lookup average by
-0.11 and cut nodes by 31%, but only ~8% of children need them and a warp
-executes the extra index computations whenever any lane does, so the
-node rate falls faster than the node count.
-
-A larger table kept in host RAM and read by the GPU over PCIe is not
-viable on this machine: random reads from GPU kernels into pinned host
-memory reach ~60 M/s (`bench/gpu_host_gather.py`), versus 3,850 M/s
-from VRAM.
-
-**Development history (same 1,000 positions, cubes/s):** three axis
-frames 7.8 → + inverse frames and block table 9.3 → branch-free edge
-conjugation 9.6 → coset axis rule 18.9 → inverse-frame inheritance 19.0
-→ per-node move masks (lookup-lane efficiency 22% → 45%) 23.7 →
-step-machine kernel with per-node frame order, block table only (lane
-efficiency 99%, half the VRAM) 28.0.
-
-**Step machine.** Each warp iteration, every lane performs exactly one
-table lookup for its current child; choosing moves, push, pop and
-fetching work run between steps. The child is evaluated on a temporary
-copy of the frame, so a pruned child needs no undo. Frames are taken in
-a per-node order (frames at the budget edge first), encoded as three
-6-bit masks. The search is then bound by DRAM random-access throughput
-(~2.5 lookups per child at ~1.5 G children/s ≈ 3.7 G lookups/s against
-a measured ceiling of 3.85 G/s).
-
-Extra tables in the step machine (`--step-extra 1|2`) cut nodes by 30%
-but nearly double lookup steps per child (2.5 → 4.8): with the axis rule
-removing most easily pruned moves up front, ~46% of the remaining
-children survive all six main lookups and then pay five more per extra
-table. Net loss (18.4 / 13.8 cubes/s).
-
-**Where the time goes (forward kernel, before the step machine).** With every lookup forced into L2 the kernel is
-only ~13% faster than with real DRAM lookups, so it is balanced between
-memory and instruction issue. 99.6% of nodes have three or more moves of
-budget left: the search lives in the top ~8 levels and is bounded by
-table information, which 16 GB of VRAM caps at this table size (the next
-size, nxopt `EO2,EP3`, needs ~23 GB).
+**Limit.** Profiling a representative search round with Nsight Compute
+shows one DRAM sector per table lookup at this card's random-read
+ceiling (122 GB/s): the solver is bound by memory reads, not computation.
+Faster memory or a card large enough for the next table size are the
+paths to more speed. The history of the design and the experiments that
+did not pay off are in [`docs/development-notes.md`](docs/development-notes.md).
 
 ## Portability
 
-- Any NVIDIA GPU of the Pascal generation (sm_61) or newer; kernels are
-  compiled at run time for the installed device (NVRTC via CuPy). The
-  launch grid scales with the SM count.
-- Solving needs ≈ 9 GB of VRAM (7.8 GB block table). Generating the
-  tables needs 16 GB (the BFS holds both encodings); on smaller cards,
-  copy prebuilt tables.
-- Only measured on an RTX 5060 Ti. The search is balanced between random
-  memory access and instruction issue, so throughput should scale with
-  both; cards with 24–32 GB could hold nxopt's next table size
-  (`EO2,EP3`, 22.7 GB), which needs ~2.3× fewer nodes on CPUs.
+- NVIDIA GPUs from Turing (sm_75) on, the oldest generation CUDA 13
+  supports; kernels are compiled at run time for the installed GPU
+  (NVRTC via CuPy), and the launch grid scales with its SM count. The
+  kernels only need Pascal-era instructions, so older cards should work
+  with a CUDA 12 build of CuPy (`cupy-cuda12x`) — untested.
+- Only measured on an RTX 5060 Ti. Throughput should scale roughly with
+  a card's random-memory-read rate. Cards with 24–32 GB could hold
+  nxopt's next table size (`EO2,EP3`, 22.7 GB), which needs ~2.3× fewer
+  nodes on CPUs; not implemented or tested.
 
-## Future work
-
-Postponed options — 8 GB-card support (base-3 table encoding, prebuilt
-table download, a single-source CPU table generator), further speed on
-16 GB, larger cards, publishing — are written up with measurements in
-[`docs/future-work.md`](docs/future-work.md).
-
-## Usage
-
-Requires an NVIDIA GPU with ≥16 GB, CUDA 13 runtime, CuPy 14.
+## Development
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -e '.[test]'
-# CuPy also needs CUDA headers if no system toolkit is installed:
-.venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'
-
-.venv/bin/cuda-cube-solver build-table               # writes tables/ (15 GB, ~2 min)
-.venv/bin/cuda-cube-solver build-table --kind 112      # optional extra tables for --mode multi
-.venv/bin/cuda-cube-solver build-table --kind 304
-echo "R U R' U' F2 D L2 B' R2 U F' L D2 R' B U2 F L'" | .venv/bin/cuda-cube-solver solve
+.venv/bin/pytest                                     # unit tests (GPU, no tables needed)
 .venv/bin/python bench/run_gpu.py data/random1000.txt --count 1000 --batch 100
-.venv/bin/pytest
 ```
+
+`docs/development-notes.md` records the design history and measured dead
+ends; `docs/future-work.md` the postponed options (8 GB cards, a CPU
+table generator, larger cards); `research/learned_table/` a negative
+result on neural-network table compression.
 
 ## Baselines
 
@@ -232,3 +224,7 @@ no code from them is included here):
 Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
 `nxopt23 -t 1 -` on the first 100 positions; cuda-cube-solver with
 `bench/run_gpu.py --count 100 --batch 1`.
+
+## License
+
+No license has been chosen yet, so all rights are reserved for now.
