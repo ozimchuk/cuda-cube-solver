@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> None:
     solve = sub.add_parser("solve", help="solve move-sequence scrambles, one per line on stdin")
     solve.add_argument("--table", type=Path, default=Path("tables/prune-ud-208.bin"))
     solve.add_argument("--batch", type=int, default=100)
-    solve.add_argument("--mode", default="forward", choices=["forward", "bidir"])
+    solve.add_argument("--mode", default="step", choices=["step", "forward", "multi", "bidir"])
     args = ap.parse_args(argv)
 
     if args.command == "build-table":

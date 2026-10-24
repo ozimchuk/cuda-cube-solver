@@ -16,7 +16,7 @@ def main():
     ap.add_argument("--prefix", type=int, default=4)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--no-inverse", action="store_true")
-    ap.add_argument("--mode", default="forward", choices=["forward", "multi", "bidir"])
+    ap.add_argument("--mode", default="step", choices=["step", "forward", "multi", "bidir"])
     ap.add_argument("--extra", type=int, default=2, help="multi mode: number of extra tables (0-2)")
     ap.add_argument("--grid", type=int, default=36 * 8)
     args = ap.parse_args()

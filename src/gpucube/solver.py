@@ -73,11 +73,12 @@ class Solution:
 
 class GpuSolver:
     def __init__(self, table_path: Path, prefix_len: int = 4, grid: int = 36 * 8, block: int = 256,
-                 inverse: bool = True, collect_stats: bool = False, mode: str = "forward",
+                 inverse: bool = True, collect_stats: bool = False, mode: str = "step",
                  extra_tables: int = 2):
-        """``mode``: "forward" (mod-3 table for the axis frames, block table for
-        inverses), "multi" (block tables only: 208 plus ``extra_tables`` of
-        112 and 304), or "bidir" (208 block table, bidirectional search)."""
+        """``mode``: "step" (default: step-machine kernel, block table only),
+        "forward" (mod-3 table for the axis frames, block table for inverses),
+        "multi" (block tables only: 208 plus ``extra_tables`` of 112 and 304),
+        or "bidir" (208 block table, bidirectional search)."""
 
         import cupy as cp
 
@@ -86,8 +87,8 @@ class GpuSolver:
         self.dt = DeviceTables()
         n_entries = self.dt.n_classes * coords.N_EDGE
         n_words = (n_entries + 15) // 16
-        self.inverse = inverse or mode in ("bidir", "multi")
-        if mode in ("bidir", "multi"):
+        self.inverse = inverse or mode in ("bidir", "multi", "step")
+        if mode in ("bidir", "multi", "step"):
             self.table = None
         else:
             self.table = load_device(table_path, n_words)
@@ -111,6 +112,8 @@ class GpuSolver:
         self.stats = cp.zeros(64, dtype=cp.uint64) if collect_stats else None
         if mode == "multi":
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
+        elif mode == "step":
+            self.k_search = module("STEP_ALL_BLOCK").get_function("search_step")
         else:
             self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
@@ -123,7 +126,7 @@ class GpuSolver:
         words = pack_states(np.stack([p[0] for p in packed]), np.stack([p[1] for p in packed]))
         n = len(all_frames)
         out = cp.zeros(n, dtype=cp.uint32)
-        if self.mode in ("bidir", "multi"):
+        if self.mode in ("bidir", "multi", "step"):
             d_words = cp.asarray(words)
             self.k_block(((n + 127) // 128,), (128,),
                          (self.dt.tables, self.blk, self.dt.classidx, d_words, np.int32(n), out))
@@ -169,6 +172,8 @@ class GpuSolver:
                     tables = (self.blk, xs[0], xs[1])
                 elif self.mode == "bidir":
                     tables = (self.blk,)
+                elif self.mode == "step":
+                    tables = (self.blk, self.blk)
                 else:
                     tables = (self.table, self.blk)
                 args = (self.dt.tables, self.sconst, *tables, self.dt.classidx, d_jobs,

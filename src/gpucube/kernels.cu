@@ -1162,3 +1162,287 @@ __device__ void search_multi_impl(const Tables* __restrict__ gT, const SearchCon
 extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi0(MULTI_ARGS) { search_multi_impl<0>(MULTI_PASS); }
 extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi1(MULTI_ARGS) { search_multi_impl<1>(MULTI_PASS); }
 extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS) search_multi2(MULTI_ARGS) { search_multi_impl<2>(MULTI_PASS); }
+
+// Block-table index for each state (validation and table experiments).
+extern "C" __global__ void probe_index_only(const Tables* __restrict__ gT, const u32* __restrict__ classidx,
+                                            const u32* __restrict__ states, int n, u64* __restrict__ out) {
+    __shared__ Tables T;
+    load_tables(T, gT);
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    State s{states[5 * i], states[5 * i + 1], states[5 * i + 2], states[5 * i + 3], states[5 * i + 4]};
+    out[i] = table_index(T, classidx, s);
+}
+
+// Block-table lower bounds at given indices.
+extern "C" __global__ void block_at(const u32* __restrict__ blk, const u64* __restrict__ idx, int n,
+                                    u32* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = block_lb(blk, idx[i]);
+}
+
+// ---------------------------------------------------------------------------
+// Step-machine search (same pruning as search6).  Every warp iteration each
+// lane performs exactly one frame lookup for its current child; control work
+// (choosing the next move, push, pop, fetching work) runs between steps.
+// A child is evaluated on a temporary copy of the frame, so a pruned child
+// needs no undo; only a surviving child applies its move to all six frames.
+
+// Frame evaluation order at a node with budget edge = bound - g: frames whose
+// value sits at the edge first (a child prunes unless it decreases), then one
+// below (prunes if it increases), then the rest; index order within a class.
+// Returned as three 6-bit frame masks (edge | one below << 6 | rest << 12);
+// the next frame is the lowest set bit, modulo 6.
+__device__ __forceinline__ u32 frame_order(const u32* h, u32 edge) {
+#ifdef FIXED_FRAME_ORDER
+    return 0x3Fu;
+#endif
+    u32 at = 0, below = 0;
+#pragma unroll
+    for (int j = 0; j < 6; ++j) {
+        at |= (u32)(h[j] >= edge) << j;
+        below |= (u32)(h[j] + 1u == edge) << j;
+    }
+    return at | (below << 6) | ((~(at | below) & 0x3Fu) << 12);
+}
+
+__device__ __forceinline__ int next_frame(u32& rem) {
+    if (!rem) return 6;
+    int b = __ffs(rem) - 1;
+    rem &= rem - 1;
+    return b % 6;
+}
+
+__device__ __forceinline__ State pick_state(const State* f, int k) {
+    State t = f[0];
+#pragma unroll
+    for (int j = 1; j < 6; ++j) {
+        if (k == j) t = f[j];
+    }
+    return t;
+}
+
+__device__ __forceinline__ u32 pick_u32(const u32* v, int k) {
+    u32 t = v[0];
+#pragma unroll
+    for (int j = 1; j < 6; ++j) {
+        if (k == j) t = v[j];
+    }
+    return t;
+}
+
+extern "C" __global__ void __launch_bounds__(256, SEARCH_MIN_BLOCKS)
+search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
+            const u32* __restrict__ table, const u32* __restrict__ blk,
+            const u32* __restrict__ classidx, CubeJob* jobs, const int* __restrict__ active, int n_active,
+            const unsigned char* __restrict__ prefixes, int n_prefix, int prefix_len,
+            unsigned long long* work_counter, unsigned long long* stats) {
+    __shared__ Tables T;
+    __shared__ SearchConst S;
+    __shared__ u32 amask[19];
+    load_tables(T, gT);
+    {
+        const u32* src = reinterpret_cast<const u32*>(gS);
+        u32* dst = reinterpret_cast<u32*>(&S);
+        for (int i = threadIdx.x; i < (int)(sizeof(SearchConst) / 4); i += blockDim.x) dst[i] = src[i];
+        __syncthreads();
+    }
+    if (threadIdx.x < 19) {
+        u32 mask = 0;
+        for (int m = 0; m < 18; ++m) mask |= (u32)S.allowed[threadIdx.x][m] << m;
+        amask[threadIdx.x] = mask;
+    }
+    __syncthreads();
+
+    unsigned char path[MAX_DEPTH];
+    u32 hstack[MAX_DEPTH];
+    const unsigned long long total = (unsigned long long)n_active * n_prefix;
+#ifdef LANE_STATS
+    unsigned long long lane_acc[16] = {};
+#endif
+
+    State f[6];
+    u32 h[6], c[6];
+    CubeJob* job = nullptr;
+    u32 bound = 0;
+    int g = 0, base = 0, last = -1;
+    u32 todo = 0;
+    unsigned long long nodes = 0;
+    bool have_item = false, done = false;
+    int m = -1;       // child under evaluation
+    int k = 0;        // 6 = survived all frames, 7 = pruned, otherwise evaluating
+    u32 rem = 0;      // frames of the current child still to evaluate (ordered masks)
+    u32 ord = 0;      // frame order masks of the current node
+    int inherit = 0;  // inverse frame whose value carries over (move's axis)
+    u32 iter = 0;
+
+    for (;;) {
+        // ---- control: until this lane has a child frame to evaluate ----
+        bool eval = false;
+        while (!done) {
+            if (m >= 0) {
+                if (k < 6) {
+                    eval = true;
+                    break;
+                }
+                if (k == 6 && !all_axes_tight<6>(c, bound - g - 1)) {
+#pragma unroll
+                    for (int j = 0; j < 6; ++j) frame_do<6>(T, S, f[j], j, m);
+                    u32 packed = 0;
+#pragma unroll
+                    for (int j = 0; j < 6; ++j) {
+                        packed |= h[j] << (5 * j);
+                        h[j] = c[j];
+                    }
+                    hstack[g] = packed;
+                    path[g] = (unsigned char)m;
+                    last = m;
+                    ++g;
+                    if ((u32)g == bound) {
+                        if (is_solved(f[0]) && atomicCAS(&job->found, 0u, 1u) == 0u) {
+                            job->solution_length = g;
+                            for (int j = 0; j < g; ++j) job->solution[j] = path[j];
+                        }
+                        todo = 0;
+                    } else {
+                        todo = amask[m + 1] & ~axis_move_mask(excluded_first_axes<6>(h, bound - g));
+                        ord = frame_order(h, bound - g);
+                    }
+                }
+                m = -1;
+                continue;
+            }
+            if (!have_item) {
+                unsigned long long w = atomicAdd(work_counter, 1ull);
+                if (w >= total) {
+                    done = true;
+                    break;
+                }
+                job = &jobs[active[w / n_prefix]];
+                if (*(volatile u32*)&job->found) continue;
+                const unsigned char* prefix = prefixes + (w % n_prefix) * prefix_len;
+                bound = job->bound;
+#pragma unroll
+                for (int j = 0; j < 6; ++j) {
+                    f[j] = job->frame[j];
+                    h[j] = job->h[j];
+                }
+                nodes = 0;
+                g = 0;
+                last = -1;
+                bool ok = true;
+                for (; g < prefix_len && ok; ++g) {
+                    int pm = prefix[g];
+                    ++nodes;
+                    if ((excluded_first_axes<6>(h, bound - g) >> ((pm / 3) % 3)) & 1u) {
+                        ok = false;
+                        break;
+                    }
+#pragma unroll
+                    for (int j = 0; j < 6; ++j) {
+                        frame_do<6>(T, S, f[j], j, pm);
+#ifdef STEP_ALL_BLOCK
+                        if (j != 3 + (pm / 3) % 3) {
+                            u32 v = block_lb(blk, table_index(T, classidx, f[j]));
+                            h[j] = (j < 3 && h[j]) ? max(v, h[j] - 1u) : v;
+                        }
+#else
+                        if (j != 3 + (pm / 3) % 3) h[j] = frame_lookup(T, table, blk, classidx, f[j], j, h[j]);
+#endif
+                        if (g + 1 + h[j] > bound) ok = false;
+                    }
+                    if (ok && all_axes_tight<6>(h, bound - g - 1)) ok = false;
+                    path[g] = (unsigned char)pm;
+                    last = pm;
+                }
+                if (!ok) {
+                    atomicAdd(&job->nodes, nodes);
+                    continue;
+                }
+                base = g;
+                if ((u32)g == bound) {
+                    if (is_solved(f[0]) && atomicCAS(&job->found, 0u, 1u) == 0u) {
+                        job->solution_length = g;
+                        for (int j = 0; j < g; ++j) job->solution[j] = path[j];
+                    }
+                    todo = 0;
+                } else {
+                    todo = amask[last + 1] & ~axis_move_mask(excluded_first_axes<6>(h, bound - g));
+                    ord = frame_order(h, bound - g);
+                }
+                have_item = true;
+                continue;
+            }
+            if (todo && !((++iter & 1023u) == 0 && *(volatile u32*)&job->found)) {
+                m = __ffs(todo) - 1;
+                todo &= todo - 1;
+                ++nodes;
+                rem = ord;
+                k = next_frame(rem);
+                inherit = 3 + (m / 3) % 3;
+                eval = true;
+                break;
+            }
+            // node exhausted (or cube solved elsewhere): pop, or finish the item
+            if (g == base || *(volatile u32*)&job->found) {
+                atomicAdd(&job->nodes, nodes);
+                have_item = false;
+                continue;
+            }
+            --g;
+            int pm = path[g];
+#pragma unroll
+            for (int j = 0; j < 6; ++j) {
+                frame_undo<6>(T, S, f[j], j, pm);
+                h[j] = (hstack[g] >> (5 * j)) & 31u;
+            }
+            last = g > 0 ? path[g - 1] : -1;
+            todo = amask[last + 1] & ~axis_move_mask(excluded_first_axes<6>(h, bound - g)) & ~((2u << pm) - 1u);
+            ord = frame_order(h, bound - g);
+        }
+        if (__all_sync(0xFFFFFFFFu, done)) break;
+        if (!eval) continue;
+
+        // ---- one lookup step: frame k of child m ----
+#ifdef LANE_STATS
+        lane_sample(lane_acc, 0);
+#endif
+        if (k == inherit) {  // inherited value: no lookup, move on to the next frame
+            c[inherit] = h[inherit];
+            k = next_frame(rem);
+            if (k == 6) continue;
+        }
+        u32 parent = pick_u32(h, k);
+        u32 v = parent;
+        {
+            State t = pick_state(f, k);
+            int mk = S.frame_move[k < 3 ? k : k - 3][m];
+            if (k < 3) apply_move(T, t, mk);
+            else apply_left(T, t, inverse_move(mk));
+            // One index computation for both frame kinds; only the decode differs.
+            u64 idx = table_index(T, classidx, t);
+#ifdef STEP_ALL_BLOCK
+            // One table for every frame; forward frames also never below parent - 1.
+            v = block_lb(blk, idx);
+            if (k < 3 && parent) v = max(v, parent - 1u);
+#else
+            if (k < 3) {
+                u32 cm = table_get(table, idx);
+                u32 r = (cm + 3u - parent % 3u) % 3u;
+                v = r == 0u ? parent : (r == 1u ? parent + 1u : parent - 1u);
+            } else {
+                v = block_lb(blk, idx);
+            }
+#endif
+        }
+#pragma unroll
+        for (int j = 0; j < 6; ++j) {
+            if (j == k) c[j] = v;
+        }
+        k = (g + 1 + v > bound) ? 7 : next_frame(rem);
+    }
+#ifdef LANE_STATS
+    if (stats)
+        for (int i = 0; i < 16; ++i) atomicAdd(&stats[32 + i], lane_acc[i]);
+#endif
+}
