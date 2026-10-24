@@ -2,29 +2,78 @@
 
 An optimal half-turn-metric Rubik's cube solver that keeps its pattern
 database in GPU memory and runs IDA* on the GPU. On a desktop with an
-RTX 5060 Ti 16 GB it solves random positions 3.7× faster than vcube and
-4.7× faster than nxopt (the two fastest open CPU optimal solvers) on the
-same machine, with a table a third of their size.
+RTX 5060 Ti 16 GB, against the two fastest open CPU optimal solvers on
+the same machine:
 
-## Results
+- **one cube at a time: ~30× faster than vcube, ~40× faster than nxopt**
+  (median 23 ms per random position versus 0.76 s and 0.98 s);
+- **1,000 cubes in bulk: 3.6× faster than vcube, 4.6× faster than nxopt**
+  (27.7 versus 7.6 and 6.0 cubes/s),
 
-1,000 random positions (`data/random1000.txt`), Ryzen 5 9600X (6 cores,
-12 threads, 30 GB RAM), RTX 5060 Ti 16 GB. Quiet machine; transparent
-huge pages `always` for the CPU solvers; solve time only (table loading
-excluded for every solver).
+with a table a third the size of theirs (7.8 GB versus 21–23 GB).
 
-| Solver | Table | Time | Cubes/s |
-|---|---|---|---|
-| nxopt `EO2,EP3` (`nxopt23`), g++ `-O3 -march=native`, 12 threads | 22.7 GB RAM | 166.3 s | 6.01 |
-| vcube `308`, clang 22 `-O3`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 |
-| **gpucube** (default `step` mode) | 7.8 GB VRAM | 35.7 s | **28.0** |
+## Comparison with vcube and nxopt
 
-All solvers return identical optimal lengths on all 1,000 positions
-(3× 15, 27× 16, 278× 17, 659× 18, 33× 19). Raw outputs are in `data/`.
+Machine: Ryzen 5 9600X (6 cores, 12 threads, 30 GB RAM), RTX 5060 Ti
+16 GB. Other programs paused; transparent huge pages `always` for the
+CPU solvers; solve time only (table loading excluded for every solver).
+All three solvers return the same optimal length for every position.
+Baseline builds and commands are listed under [Baselines](#baselines).
 
-These are single-machine numbers. On large servers vcube reports 55
-cubes/s (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores, 256 GB);
-this project has not been run on comparable GPU hardware.
+### Bulk: 1,000 random positions
+
+`data/random1000.txt` (40 random moves each). Each solver uses the whole
+machine: vcube and nxopt solve 12 cubes at a time, one per thread;
+gpucube searches batches of 100 cubes on the GPU.
+
+| Solver | Table | Time | Cubes/s | gpucube speedup |
+|---|---|---|---|---|
+| nxopt `EO2,EP3` (`nxopt23`), 12 threads | 22.7 GB RAM | 166.3 s | 6.01 | 4.6× |
+| vcube `308`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 | 3.6× |
+| **gpucube** (default) | 7.8 GB VRAM | **36.2 s** | **27.7** | — |
+
+Optimal lengths: 3× 15, 27× 16, 278× 17, 659× 18, 33× 19 moves.
+Raw outputs: `data/gpucube_1000.txt`, `data/vcube308_quiet_1000.txt`,
+`data/nxopt23_quiet_1000.txt`.
+
+### One cube at a time: first 100 of those positions
+
+Time to solve a single cube with nothing else queued. vcube and nxopt
+search one cube on one thread (they parallelise only across cubes), so
+they run with one worker here; gpucube spreads one cube over the whole
+GPU (43,254 work items per cube).
+
+| Solver | Median | 90th percentile | Worst | Mean |
+|---|---|---|---|---|
+| nxopt `EO2,EP3`, 1 thread | 0.976 s | 3.09 s | 17.4 s | 1.53 s |
+| vcube `308`, 1 thread | 0.763 s | 2.32 s | 7.92 s | 1.08 s |
+| **gpucube** | **0.023 s** | **0.072 s** | **0.263 s** | **0.034 s** |
+
+By optimal solution length (median time per cube):
+
+| Optimal length | Cubes | nxopt | vcube | gpucube |
+|---|---|---|---|---|
+| 16 | 2 | 0.03 s | 0.02 s | 0.002 s |
+| 17 | 32 | 0.17 s | 0.13 s | 0.009 s |
+| 18 | 65 | 1.35 s | 0.95 s | 0.036 s |
+| 19 | 1 | 10.1 s | 7.92 s | 0.263 s |
+
+Raw outputs: `data/single_cube/`.
+
+### Reading these numbers
+
+- The single-cube gap (~30–40×) is larger than the bulk gap (~4×)
+  because the CPU solvers use one of 12 threads for a single cube.
+- These are single-machine numbers. On large servers vcube reports 55
+  cubes/s (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores,
+  256 GB); gpucube has not been run on comparable GPU hardware.
+- [GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks), the only other
+  public GPU solver found, solves in the quarter-turn metric with a small
+  per-cubie heuristic and is meant for scrambles up to ~15 moves; on this
+  GPU its solver did not finish cubes needing 8 or more quarter turns
+  (see `docs/future-work.md`). gpucube solves its scramble distribution
+  (`data/gpurubiks/`) in 0.3 ms per cube at 13 quarter turns, but in the
+  half-turn metric, so this is not a like-for-like comparison.
 
 ## How it works
 
@@ -171,3 +220,7 @@ no code from them is included here):
 - nxopt from cube20src, <https://github.com/rokicki/cube20src>, commit
   `f430921a`, `g++ -DPS=16 -O3 -march=native -DHALF -DTHREADS -DEO2 -DEP3`;
   `nxopt23 -t 12 -` with moves converted to `U1R3…` (`data/random1000.nxopt.txt`).
+
+Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
+`nxopt23 -t 1 -` on the first 100 positions; gpucube with
+`bench/run_gpu.py --count 100 --batch 1`.
