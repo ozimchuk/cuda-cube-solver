@@ -136,6 +136,13 @@ size, nxopt `EO2,EP3`, needs ~23 GB).
   both; cards with 24–32 GB could hold nxopt's next table size
   (`EO2,EP3`, 22.7 GB), which needs ~2.3× fewer nodes on CPUs.
 
+## Future work
+
+Postponed options — 8 GB-card support (base-3 table encoding, prebuilt
+table download, a single-source CPU table generator), further speed on
+16 GB, larger cards, publishing — are written up with measurements in
+[`docs/future-work.md`](docs/future-work.md).
+
 ## Usage
 
 Requires an NVIDIA GPU with ≥16 GB, CUDA 13 runtime, CuPy 14.
