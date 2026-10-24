@@ -71,8 +71,19 @@ class Solution:
         return " ".join(MOVE_NAMES_HTM[m] for m in self.moves)
 
 
+class TableNotFound(FileNotFoundError):
+    """A pruning table file is missing."""
+
+
+def _table_file(tables: Path, name: str) -> Path:
+    path = tables / name
+    if not path.exists():
+        raise TableNotFound(f"{path} not found; build the tables with `cuda-cube-solver build-table --out {tables}`")
+    return path
+
+
 class GpuSolver:
-    def __init__(self, table_path: Path, prefix_len: int = 4, grid: int | None = None, block: int = 256,
+    def __init__(self, tables: Path = Path("tables"), prefix_len: int = 4, grid: int | None = None, block: int = 256,
                  inverse: bool = True, collect_stats: bool = False, mode: str = "step",
                  extra_tables: int = 2, step_extra: int = 0, table_format: str = "block",
                  step_defines: tuple[str, ...] = ()):
@@ -83,6 +94,10 @@ class GpuSolver:
 
         import cupy as cp
 
+        # A tables directory; a path to a table file inside it is accepted too.
+        tables = Path(tables)
+        if tables.suffix == ".bin":
+            tables = tables.parent
         self.cp = cp
         self.mode = mode
         self.dt = DeviceTables()
@@ -92,18 +107,18 @@ class GpuSolver:
         if mode in ("bidir", "multi", "step"):
             self.table = None
         else:
-            self.table = load_device(table_path, n_words)
+            self.table = load_device(_table_file(tables, "prune-ud-208.bin"), n_words)
         self.table_format = table_format
         if table_format == "bit":
             # "blk" holds the threshold-bit table; the 304 block table is the fallback.
             if mode != "step" or step_extra:
                 raise ValueError("table_format='bit' needs mode='step' without extra tables")
-            self.blk = load_device(table_path.with_name(f"{table_path.stem}-bit11.bin"), (n_entries + 31) // 32)
+            self.blk = load_device(_table_file(tables, "prune-ud-208-bit11.bin"), (n_entries + 31) // 32)
             k304 = coords.EdgeKind(3, 4)
-            self.fallback = load_device(table_path.with_name("prune-ud-304-blk.bin"),
+            self.fallback = load_device(_table_file(tables, "prune-ud-304-blk.bin"),
                                         block_words(self.dt.n_classes * k304.n_edge))
         elif self.inverse:
-            self.blk = load_device(table_path.with_name(f"{table_path.stem}-blk.bin"), block_words(n_entries))
+            self.blk = load_device(_table_file(tables, "prune-ud-208-blk.bin"), block_words(n_entries))
         else:
             self.blk = self.table
         self.extra = []
@@ -111,7 +126,7 @@ class GpuSolver:
             n_extra = extra_tables if mode == "multi" else step_extra
             for name in ("112", "304")[:n_extra]:
                 kind = coords.EdgeKind.parse(name)
-                path = table_path.with_name(f"prune-ud-{name}-blk.bin")
+                path = _table_file(tables, f"prune-ud-{name}-blk.bin")
                 self.extra.append((kind, load_device(path, block_words(self.dt.n_classes * kind.n_edge))))
         self.sconst = cp.asarray(np.frombuffer(search_const(), dtype=np.uint8))
         self.prefix_len = prefix_len

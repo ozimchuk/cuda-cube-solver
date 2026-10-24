@@ -12,7 +12,7 @@ def main():
     ap.add_argument("scrambles", type=Path)
     ap.add_argument("--count", type=int, default=10)
     ap.add_argument("--batch", type=int, default=10)
-    ap.add_argument("--table", type=Path, default=Path("tables/prune-ud-208.bin"))
+    ap.add_argument("--tables", type=Path, default=Path("tables"))
     ap.add_argument("--prefix", type=int, default=4)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--no-inverse", action="store_true")
@@ -25,7 +25,7 @@ def main():
     args = ap.parse_args()
     lines = args.scrambles.read_text().splitlines()[: args.count]
     states = [apply_moves(CubieState(), [MOVES_HTM[m] for m in parse_moves(l)]) for l in lines]
-    solver = GpuSolver(args.table, prefix_len=args.prefix, inverse=not args.no_inverse, mode=args.mode, grid=args.grid, extra_tables=args.extra, step_extra=args.step_extra, table_format=args.table_format, step_defines=tuple(args.define))
+    solver = GpuSolver(args.tables, prefix_len=args.prefix, inverse=not args.no_inverse, mode=args.mode, grid=args.grid, extra_tables=args.extra, step_extra=args.step_extra, table_format=args.table_format, step_defines=tuple(args.define))
     out = []
     t = time.perf_counter()
     nodes = 0

@@ -22,6 +22,7 @@ output (one line per cube, in input order):
   <line number> error <message>      invalid input (the other lines still run)
 
 Loading the table takes 1-5 s per invocation, so pipe many cubes into one run.
+Only tables/prune-ud-208-blk.bin is needed for solving (--tables to change).
 """
 
 
@@ -40,9 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     solve = sub.add_parser("solve", help="solve cubes read from stdin (scrambles or facelet strings)",
                            description="Solve cubes optimally.", epilog=SOLVE_EPILOG,
                            formatter_class=argparse.RawDescriptionHelpFormatter)
-    solve.add_argument("--table", type=Path, default=Path("tables/prune-ud-208.bin"),
-                       help="path of prune-ud-208.bin; its -blk.bin companion is what is loaded "
-                            "(default: tables/prune-ud-208.bin)")
+    solve.add_argument("--tables", type=Path, default=Path("tables"),
+                       help="directory with the tables; solving loads prune-ud-208-blk.bin (default: tables)")
     solve.add_argument("--format", choices=["auto", "moves", "facelets"], default="auto",
                        help="input format (default: auto-detect per line)")
     solve.add_argument("--batch", type=int, default=100, help="cubes searched together on the GPU (default: 100)")
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
     from cuda_cube_solver.facelets import FaceletError, is_facelet_string, parse_facelets
-    from cuda_cube_solver.solver import GpuSolver, parse_moves
+    from cuda_cube_solver.solver import GpuSolver, TableNotFound, parse_moves
 
     cubes: list[tuple[int, CubieState]] = []
     errors: list[tuple[int, str]] = []  # printed in input order, between solutions
@@ -83,7 +83,10 @@ def main(argv: list[str] | None = None) -> None:
             print(errors.pop(0)[1], flush=True)
 
     if cubes:
-        solver = GpuSolver(args.table, mode=args.mode)
+        try:
+            solver = GpuSolver(args.tables, mode=args.mode)
+        except TableNotFound as exc:
+            sys.exit(f"cuda-cube-solver: {exc}")
         for start in range(0, len(cubes), args.batch):
             chunk = cubes[start:start + args.batch]
             for (number, _), sol in zip(chunk, solver.solve([state for _, state in chunk])):

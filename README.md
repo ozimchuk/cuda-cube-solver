@@ -67,8 +67,10 @@ echo "DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD" | .venv/bin/cuda-c
   centres define the faces, so colour letters such as `W G R …` are fine.
 - **Startup:** each invocation loads the table (1–5 s) before solving,
   so pipe many cubes into one run rather than calling it per cube.
-- `cuda-cube-solver solve --help` lists the options; the table location
-  defaults to `tables/` and can be changed with `--table`.
+- `cuda-cube-solver solve --help` lists the options. Tables are read
+  from `tables/` (change with `--tables`); solving needs only
+  `prune-ud-208-blk.bin`, so the other files can be left out or deleted
+  after building.
 
 From Python:
 
@@ -77,7 +79,7 @@ from pathlib import Path
 from cuda_cube_solver.facelets import parse_facelets
 from cuda_cube_solver.solver import GpuSolver
 
-solver = GpuSolver(Path("tables/prune-ud-208.bin"))   # loads the -blk.bin table
+solver = GpuSolver(Path("tables"))   # loads tables/prune-ud-208-blk.bin
 solution = solver.solve([parse_facelets("DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD")])[0]
 print(len(solution.moves), solution.text())
 ```
