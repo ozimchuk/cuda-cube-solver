@@ -41,8 +41,36 @@ python3 -m venv .venv
 # CuPy also needs CUDA headers if no CUDA toolkit is installed system-wide:
 .venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'
 
-.venv/bin/cuda-cube-solver build-table      # writes tables/ (~2 min, 16 GB VRAM)
+.venv/bin/cuda-cube-solver build-table      # writes tables/ (~2 min, 16 GB VRAM; see below)
 ```
+
+### Building the table
+
+Solving needs a pruning table that is generated once, on the GPU:
+
+```bash
+.venv/bin/cuda-cube-solver build-table              # or: --out /path/to/dir (default: tables/)
+```
+
+- **Needs** a GPU with 16 GB of VRAM, ~2 GB of host RAM and 14.3 GiB of
+  free disk. Takes about 2 minutes on an RTX 5060 Ti.
+- **Writes** `prune-ud-208-blk.bin` (7.3 GiB, the only file solving
+  reads), `prune-ud-208.bin` (7.0 GiB, needed only to rebuild variants)
+  and `prune-ud-208.json` (per-depth entry counts and timing).
+- **Progress** is printed per breadth-first-search depth (13 depths). The
+  build checks itself before writing: the entry counts must add up and
+  every table block must be filled, otherwise it stops with an error.
+  The counts can also be compared with the
+  [expected values](docs/development-notes.md#expected-table-contents),
+  which match vcube's `208` table generator.
+- **Smaller GPUs** (≥ 9 GB, Turing or newer) can solve but not build:
+  copy `prune-ud-208-blk.bin` from a machine with a 16 GB card into a
+  `tables/` folder (or point `--tables` at it). No prebuilt download is
+  published yet.
+- `--kind 112` / `--kind 304` build extra tables used only by
+  experimental modes; they are not needed.
+
+### Solving
 
 Solve a scramble (the cube it produces from solved), a 54-sticker
 facelet string, or a whole file — one cube per line on stdin:

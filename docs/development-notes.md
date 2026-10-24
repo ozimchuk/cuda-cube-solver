@@ -21,6 +21,31 @@ are in [`future-work.md`](future-work.md).
 Later re-measurements of the final kernel give 27.6–27.8 cubes/s; the
 README uses the most recent run (27.7).
 
+## Expected table contents
+
+`cuda-cube-solver build-table` should report these entry counts per
+depth (also stored in `tables/prune-ud-208.json`). Depths 1–11 equal the
+counts printed by vcube's generator for its `208` table; vcube does not
+print 12 and 13.
+
+| Depth | Entries |
+|---|---|
+| 0 | 1 |
+| 1 | 2 |
+| 2 | 22 |
+| 3 | 200 |
+| 4 | 2,137 |
+| 5 | 23,903 |
+| 6 | 287,698 |
+| 7 | 3,560,276 |
+| 8 | 44,164,674 |
+| 9 | 530,379,944 |
+| 10 | 5,233,704,011 |
+| 11 | 19,675,963,236 |
+| 12 | 4,711,576,986 |
+| 13 | 247,310 |
+| total | 30,199,910,400 |
+
 ## The forward kernel (before the step machine)
 
 Each thread runs its own depth-first search and checks a child's frames
