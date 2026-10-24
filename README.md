@@ -1,4 +1,4 @@
-# gpucube — optimal 3×3 solving on the GPU
+# cuda-cube-solver — optimal 3×3 solving on the GPU
 
 An optimal half-turn-metric Rubik's cube solver that keeps its pattern
 database in GPU memory and runs IDA* on the GPU. On a desktop with an
@@ -12,6 +12,8 @@ the same machine:
 
 with a table a third the size of theirs (7.8 GB versus 21–23 GB).
 
+The Python package and command are named `gpucube`.
+
 ## Comparison with vcube and nxopt
 
 Machine: Ryzen 5 9600X (6 cores, 12 threads, 30 GB RAM), RTX 5060 Ti
@@ -24,34 +26,40 @@ Baseline builds and commands are listed under [Baselines](#baselines).
 
 `data/random1000.txt` (40 random moves each). Each solver uses the whole
 machine: vcube and nxopt solve 12 cubes at a time, one per thread;
-gpucube searches batches of 100 cubes on the GPU.
+cuda-cube-solver searches batches of 100 cubes on the GPU.
 
-| Solver | Table | Time | Cubes/s | gpucube speedup |
+| Solver | Table | Time | Cubes/s | cuda-cube-solver speedup |
 |---|---|---|---|---|
 | nxopt `EO2,EP3` (`nxopt23`), 12 threads | 22.7 GB RAM | 166.3 s | 6.01 | 4.6× |
 | vcube `308`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 | 3.6× |
-| **gpucube** (default) | 7.8 GB VRAM | **36.2 s** | **27.7** | — |
+| **cuda-cube-solver** (default) | 7.8 GB VRAM | **36.2 s** | **27.7** | — |
 
 Optimal lengths: 3× 15, 27× 16, 278× 17, 659× 18, 33× 19 moves.
-Raw outputs: `data/gpucube_1000.txt`, `data/vcube308_quiet_1000.txt`,
+Raw outputs: `data/cuda-cube-solver_1000.txt`, `data/vcube308_quiet_1000.txt`,
 `data/nxopt23_quiet_1000.txt`.
 
 ### One cube at a time: first 100 of those positions
 
+The first 100 lines of `data/random1000.txt` — a subset because the
+CPU solvers need 1–1.5 s per position on one thread. Their optimal
+lengths (2× 16, 32× 17, 65× 18, 1× 19) are close to the full set's
+distribution, with slightly fewer 19-movers, so absolute times are a
+little optimistic for all three solvers alike.
+
 Time to solve a single cube with nothing else queued. vcube and nxopt
 search one cube on one thread (they parallelise only across cubes), so
-they run with one worker here; gpucube spreads one cube over the whole
+they run with one worker here; cuda-cube-solver spreads one cube over the whole
 GPU (43,254 work items per cube).
 
 | Solver | Median | 90th percentile | Worst | Mean |
 |---|---|---|---|---|
 | nxopt `EO2,EP3`, 1 thread | 0.976 s | 3.09 s | 17.4 s | 1.53 s |
 | vcube `308`, 1 thread | 0.763 s | 2.32 s | 7.92 s | 1.08 s |
-| **gpucube** | **0.023 s** | **0.072 s** | **0.263 s** | **0.034 s** |
+| **cuda-cube-solver** | **0.023 s** | **0.072 s** | **0.263 s** | **0.034 s** |
 
 By optimal solution length (median time per cube):
 
-| Optimal length | Cubes | nxopt | vcube | gpucube |
+| Optimal length | Cubes | nxopt | vcube | cuda-cube-solver |
 |---|---|---|---|---|
 | 16 | 2 | 0.03 s | 0.02 s | 0.002 s |
 | 17 | 32 | 0.17 s | 0.13 s | 0.009 s |
@@ -66,12 +74,12 @@ Raw outputs: `data/single_cube/`.
   because the CPU solvers use one of 12 threads for a single cube.
 - These are single-machine numbers. On large servers vcube reports 55
   cubes/s (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores,
-  256 GB); gpucube has not been run on comparable GPU hardware.
+  256 GB); cuda-cube-solver has not been run on comparable GPU hardware.
 - [GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks), the only other
   public GPU solver found, solves in the quarter-turn metric with a small
   per-cubie heuristic and is meant for scrambles up to ~15 moves; on this
   GPU its solver did not finish cubes needing 8 or more quarter turns
-  (see `docs/future-work.md`). gpucube solves its scramble distribution
+  (see `docs/future-work.md`). cuda-cube-solver solves its scramble distribution
   (`data/gpurubiks/`) in 0.3 ms per cube at 13 quarter turns, but in the
   half-turn metric, so this is not a like-for-like comparison.
 
@@ -222,5 +230,5 @@ no code from them is included here):
   `nxopt23 -t 12 -` with moves converted to `U1R3…` (`data/random1000.nxopt.txt`).
 
 Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
-`nxopt23 -t 1 -` on the first 100 positions; gpucube with
+`nxopt23 -t 1 -` on the first 100 positions; cuda-cube-solver with
 `bench/run_gpu.py --count 100 --batch 1`.

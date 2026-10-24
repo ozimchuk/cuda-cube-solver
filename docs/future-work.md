@@ -176,7 +176,7 @@ unnamed GPU and recommends depths up to 15. Built here with CUDA 13
 (`compute_60` → `sm_120`): its GPU solver did not finish 5–7 of 12
 depth-8 scrambles within 20 s (only cubes solvable in ≤ 6 moves
 finished), while its CPU solver worked — most likely a warp-synchronous
-assumption broken on post-Volta GPUs. gpucube solves the same scramble
+assumption broken on post-Volta GPUs. cuda-cube-solver solves the same scramble
 distribution (`data/gpurubiks/`, half-turn metric) in 0.2–0.3 ms per
 cube up to 13 quarter turns and 4 ms at 20. Nothing to adopt (see
 sibling locality above).
