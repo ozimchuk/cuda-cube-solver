@@ -108,7 +108,7 @@ class GpuSolver:
         mod = module()
         self.n_frames = 6 if self.inverse else 3
         # per-frame lookup counts [0:6], prune counts [8:14], children by budget 0,1,2,3+ [16:20]; slows the kernel
-        self.stats = cp.zeros(24, dtype=cp.uint64) if collect_stats else None
+        self.stats = cp.zeros(64, dtype=cp.uint64) if collect_stats else None
         if mode == "multi":
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
         else:

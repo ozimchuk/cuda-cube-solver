@@ -585,6 +585,23 @@ __device__ __forceinline__ void frame_undo(const Tables& T, const SearchConst& S
 
 // Work item w -> (cube w / n_prefix, prefix w % n_prefix).  Prefixes are
 // canonical move sequences of length prefix_len stored as bytes.
+// Diagnostic (LANE_STATS): one lane per warp-level execution records how
+// many lanes are active, accumulated into stats[32 + 2*slot], stats[33 + 2*slot].
+__device__ __forceinline__ void lane_sample(unsigned long long* acc, int slot) {
+#ifdef LANE_STATS
+    u32 mask = __activemask();
+    if ((threadIdx.x & 31) == __ffs(mask) - 1) {
+        acc[2 * slot] += 1;
+        acc[2 * slot + 1] += __popc(mask);
+    }
+#endif
+}
+
+// 18-bit mask of the moves on the given axes (bit a: faces a and a + 3).
+__device__ __forceinline__ u32 axis_move_mask(u32 axes) {
+    return ((axes & 1u) ? 0x00E07u : 0u) | ((axes & 2u) ? 0x07038u : 0u) | ((axes & 4u) ? 0x381C0u : 0u);
+}
+
 template <int NF>
 __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                             const u32* __restrict__ table, const u32* __restrict__ blk,
@@ -600,13 +617,30 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
         for (int i = threadIdx.x; i < (int)(sizeof(SearchConst) / 4); i += blockDim.x) dst[i] = src[i];
         __syncthreads();
     }
+    // amask[last + 1]: canonical moves allowed after `last` (18-bit mask).
+    __shared__ u32 amask[19];
+    if (threadIdx.x < 19) {
+        u32 mask = 0;
+        for (int m = 0; m < 18; ++m) mask |= (u32)S.allowed[threadIdx.x][m] << m;
+        amask[threadIdx.x] = mask;
+    }
+    __syncthreads();
     unsigned char path[MAX_DEPTH];
     u32 hstack[MAX_DEPTH];
     const unsigned long long total = (unsigned long long)n_active * n_prefix;
+#ifdef LANE_STATS
+    unsigned long long lane_acc[16] = {};
+#endif
 
     for (;;) {
         unsigned long long w = atomicAdd(work_counter, 1ull);
-        if (w >= total) return;
+        if (w >= total) {
+#ifdef LANE_STATS
+            if (stats)
+                for (int i = 0; i < 16; ++i) atomicAdd(&stats[32 + i], lane_acc[i]);
+#endif
+            return;
+        }
         int job_id = active[w / n_prefix];
         CubeJob* job = &jobs[job_id];
         if (*(volatile u32*)&job->found) continue;
@@ -648,21 +682,25 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
             continue;
         }
         const int base = g;
-        int next = 0;
+        // Moves still to try at the current node: canonical and not excluded
+        // by the axis rule, so every iteration tests a real child or pops.
+        u32 todo = amask[last + 1] & ~axis_move_mask(excluded_first_axes<NF>(h, bound - g));
         u32 iter = 0;
         for (;;) {
             if ((++iter & 1023u) == 0 && *(volatile u32*)&job->found) break;
+#ifdef LANE_STATS
+            lane_sample(lane_acc, 7);  // every DFS loop iteration
+#endif
             if ((u32)g == bound) {
                 if (is_solved(f[0]) && atomicCAS(&job->found, 0u, 1u) == 0u) {
                     job->solution_length = g;
                     for (int j = 0; j < g; ++j) job->solution[j] = path[j];
                 }
-                next = 18;
+                todo = 0;
             }
-            if (next < 18) {
-                int m = next++;
-                if (!S.allowed[last + 1][m]) continue;
-                if ((excluded_first_axes<NF>(h, bound - g) >> ((m / 3) % 3)) & 1u) continue;
+            if (todo) {
+                int m = __ffs(todo) - 1;
+                todo &= todo - 1;
                 ++nodes;
                 ++st_budget[min(bound - g - 1u, 3u)];
                 u32 c[NF];
@@ -673,6 +711,9 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
 #pragma unroll
                 for (int k = 0; k < NF; ++k) {
                     if (pruned == NF) {
+#ifdef LANE_STATS
+                        lane_sample(lane_acc, k);  // frame k block
+#endif
                         frame_do<NF>(T, S, f[k], k, m);
                         c[k] = k == inherit ? h[k] : frame_lookup(T, table, blk, classidx, f[k], k, h[k]);
                         ++st_look[k];
@@ -699,7 +740,7 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
                 path[g] = (unsigned char)m;
                 last = m;
                 ++g;
-                next = 0;
+                todo = amask[m + 1] & ~axis_move_mask(excluded_first_axes<NF>(h, bound - g));
             } else {
                 if (g == base) break;
                 --g;
@@ -709,8 +750,8 @@ __device__ void search_impl(const Tables* __restrict__ gT, const SearchConst* __
                     frame_undo<NF>(T, S, f[k], k, m);
                     h[k] = (hstack[g] >> (5 * k)) & 31u;
                 }
-                next = m + 1;
                 last = g > 0 ? path[g - 1] : -1;
+                todo = amask[last + 1] & ~axis_move_mask(excluded_first_axes<NF>(h, bound - g)) & ~((2u << m) - 1u);
             }
         }
         atomicAdd(&job->nodes, nodes);
