@@ -3,8 +3,8 @@ import argparse
 import time
 from pathlib import Path
 
-from gpucube.solver import GpuSolver, parse_moves
-from gpucube.cubie import MOVES_HTM, CubieState, apply_moves
+from cuda_cube_solver.solver import GpuSolver, parse_moves
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
 
 
 def main():

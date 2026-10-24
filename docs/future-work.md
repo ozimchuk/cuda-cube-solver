@@ -65,7 +65,7 @@ with a checksum. Zero code; enough if the audience is small.
   histogram, final encoding), GCC atomics instead of CUDA atomics.
 - Python compiles the file with `g++ -O3 -fopenmp` at first use and
   calls it through `ctypes` (the CPU counterpart of CuPy/NVRTC):
-  `gpucube build-table --device cpu`.
+  `cuda-cube-solver build-table --device cpu`.
 - BFS on exact 4-bit depths (15 GB RAM), then base-3 blocks with the
   per-block cut. Expected 5–15 min on 12 threads (vcube builds the same
   table in 4 min 21 s, nxopt in 2 min 24 s, both with SIMD code).
@@ -92,7 +92,7 @@ little gain; superseded by 1c.
 From `research/learned_table/`: one bit per entry, d ≥ 11, and the 304
 table (1.4 GB) when the bit is clear. 5.2 GB in total; avg6 11.844 versus
 11.862 exact. Implemented as `--table-format bit`
-(`gpucube.table.build_bit_table`, kernel define `TABLE_BIT`; the fallback
+(`cuda_cube_solver.table.build_bit_table`, kernel define `TABLE_BIT`; the fallback
 read is deferred to the lane's next step).
 
 Measured on the 1,000 positions (RTX 5060 Ti, register cap
@@ -123,7 +123,7 @@ since it keeps 12 distinct in most blocks (94% exact). Not yet measured.
 ## 2. Further speed on 16 GB
 
 **Profile (Nsight Compute 2026.2, `bench/profile_step.py 10 17`, a
-bound-17 round as in real solves; `GPUCUBE_LINEINFO=1` for source
+bound-17 round as in real solves; `CUDA_CUBE_SOLVER_LINEINFO=1` for source
 attribution).** DRAM throughput 122 GB/s = one DRAM sector per table
 lookup at 3.8 G sectors/s, the random-read ceiling measured on this card
 (`bench/gpu_gather.py`). Compute 66%, 9 active threads per warp on

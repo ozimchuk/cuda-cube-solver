@@ -13,10 +13,10 @@ dependencies = ["numpy>=1.26", "cupy-cuda13x>=14,<15"]
 test = ["pytest>=8"]
 
 [project.scripts]
-gpucube = "gpucube.__main__:main"
+cuda-cube-solver = "cuda_cube_solver.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-gpucube = ["kernels.cu"]
+cuda_cube_solver = ["kernels.cu"]

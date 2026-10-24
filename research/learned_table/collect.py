@@ -11,9 +11,9 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
-from gpucube import coords, device, table
-from gpucube.cubie import MOVES_HTM, CubieState, apply_moves
-from gpucube.solver import frames
+from cuda_cube_solver import coords, device, table
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
+from cuda_cube_solver.solver import frames
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("research/learned_table/data")
 N_TRAIN = 60_000_000

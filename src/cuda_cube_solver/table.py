@@ -8,8 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-from gpucube import coords
-from gpucube.device import DeviceTables, module
+from cuda_cube_solver import coords
+from cuda_cube_solver.device import DeviceTables, module
 
 GRID = 36 * 32
 BLOCK = 256

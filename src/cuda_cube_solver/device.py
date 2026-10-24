@@ -8,9 +8,9 @@ from pathlib import Path
 
 import numpy as np
 
-from gpucube import coords
-from gpucube.geometry import ud_symmetries
-from gpucube.cubie import MOVES_HTM
+from cuda_cube_solver import coords
+from cuda_cube_solver.geometry import ud_symmetries
+from cuda_cube_solver.cubie import MOVES_HTM
 
 KERNEL_PATH = Path(__file__).with_name("kernels.cu")
 
@@ -110,7 +110,7 @@ def module(*defines: str):
     import cupy as cp
 
     options = ("--std=c++17",) + tuple(f"-D{d}" for d in defines)
-    if os.environ.get("GPUCUBE_LINEINFO"):
+    if os.environ.get("CUDA_CUBE_SOLVER_LINEINFO"):
         options += ("-lineinfo",)  # source attribution in Nsight Compute
     return cp.RawModule(code=KERNEL_PATH.read_text(), options=options)
 

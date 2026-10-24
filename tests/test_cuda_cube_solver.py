@@ -3,8 +3,8 @@ import random
 import numpy as np
 import pytest
 
-from gpucube import coords, geometry
-from gpucube.cubie import MOVES_HTM, CubieState, apply_moves, compose
+from cuda_cube_solver import coords, geometry
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves, compose
 
 
 def _random_states(n: int, seed: int) -> list[CubieState]:
@@ -60,7 +60,7 @@ def test_quotient_action_is_well_defined(kind) -> None:
 @pytest.mark.parametrize("kind", KINDS, ids=lambda k: k.name)
 def test_gpu_index_and_unrank_match_host(kind) -> None:
     cp = pytest.importorskip("cupy")
-    from gpucube import device
+    from cuda_cube_solver import device
 
     dt = device.DeviceTables()
     mod = device.module(*kind.defines)
@@ -87,7 +87,7 @@ def test_gpu_index_and_unrank_match_host(kind) -> None:
 
 def test_gpu_moves_left_moves_and_index_match_host() -> None:
     cp = pytest.importorskip("cupy")
-    from gpucube import device
+    from cuda_cube_solver import device
 
     dt = device.DeviceTables()
     states = _random_states(200, 2)

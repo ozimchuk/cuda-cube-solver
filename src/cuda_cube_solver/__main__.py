@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="gpucube")
+    ap = argparse.ArgumentParser(prog="cuda-cube-solver")
     sub = ap.add_subparsers(dest="command", required=True)
     build = sub.add_parser("build-table", help="generate the pruning tables on the GPU (~2 min, 15 GB)")
     build.add_argument("--out", type=Path, default=Path("tables"))
@@ -20,13 +20,13 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     if args.command == "build-table":
-        from gpucube import coords, table
+        from cuda_cube_solver import coords, table
 
         print(table.build(args.out, coords.EdgeKind.parse(args.kind)))
         return
 
-    from gpucube.cubie import MOVES_HTM, CubieState, apply_moves
-    from gpucube.solver import GpuSolver, parse_moves
+    from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
+    from cuda_cube_solver.solver import GpuSolver, parse_moves
 
     lines = [line.strip() for line in sys.stdin if line.strip()]
     states = [apply_moves(CubieState(), [MOVES_HTM[m] for m in parse_moves(line)]) for line in lines]

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
-from gpucube import coords
-from gpucube.device import DeviceTables, module, pack_states
-from gpucube.geometry import axis_rotation, move_map
-from gpucube.table import block_words, load_device
-from gpucube.cubie import MOVE_NAMES_HTM, MOVES_HTM, CubieState, apply_moves
+from cuda_cube_solver import coords
+from cuda_cube_solver.device import DeviceTables, module, pack_states
+from cuda_cube_solver.geometry import axis_rotation, move_map
+from cuda_cube_solver.table import block_words, load_device
+from cuda_cube_solver.cubie import MOVE_NAMES_HTM, MOVES_HTM, CubieState, apply_moves
 
 JOB_DTYPE = np.dtype(
     [

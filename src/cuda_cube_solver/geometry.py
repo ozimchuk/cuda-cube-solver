@@ -13,7 +13,7 @@ from itertools import permutations, product
 
 import numpy as np
 
-from gpucube.cubie import CORNER_NAMES, EDGE_NAMES, MOVES_HTM, CubieState
+from cuda_cube_solver.cubie import CORNER_NAMES, EDGE_NAMES, MOVES_HTM, CubieState
 
 FACE_NORMAL = {
     "U": (0, 1, 0), "R": (1, 0, 0), "F": (0, 0, 1),

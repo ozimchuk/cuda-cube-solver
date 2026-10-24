@@ -22,8 +22,8 @@ from itertools import combinations, permutations
 
 import numpy as np
 
-from gpucube.geometry import Symmetry, ud_symmetries
-from gpucube.cubie import MOVES_HTM, CubieState
+from cuda_cube_solver.geometry import Symmetry, ud_symmetries
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState
 
 N_TWIST = 3**7
 N_CCOMB = 70

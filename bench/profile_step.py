@@ -9,8 +9,8 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
-from gpucube.cubie import MOVES_HTM, CubieState, apply_moves
-from gpucube.solver import JOB_DTYPE, GpuSolver, parse_moves
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
+from cuda_cube_solver.solver import JOB_DTYPE, GpuSolver, parse_moves
 
 COUNT = int(sys.argv[1]) if len(sys.argv) > 1 else 10
 BOUND = int(sys.argv[2]) if len(sys.argv) > 2 else 16

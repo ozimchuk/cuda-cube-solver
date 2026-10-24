@@ -6,9 +6,9 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
-from gpucube.device import module
-from gpucube.solver import JOB_DTYPE, GpuSolver, parse_moves
-from gpucube.cubie import MOVES_HTM, CubieState, apply_moves
+from cuda_cube_solver.device import module
+from cuda_cube_solver.solver import JOB_DTYPE, GpuSolver, parse_moves
+from cuda_cube_solver.cubie import MOVES_HTM, CubieState, apply_moves
 
 
 def main():
