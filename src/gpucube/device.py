@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -109,6 +110,8 @@ def module(*defines: str):
     import cupy as cp
 
     options = ("--std=c++17",) + tuple(f"-D{d}" for d in defines)
+    if os.environ.get("GPUCUBE_LINEINFO"):
+        options += ("-lineinfo",)  # source attribution in Nsight Compute
     return cp.RawModule(code=KERNEL_PATH.read_text(), options=options)
 
 

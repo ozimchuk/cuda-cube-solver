@@ -216,6 +216,7 @@ __device__ __forceinline__ u64 table_index_any(const Tables& T, const u32* __res
     return cls * N_EDGE_304 + (slice * 70u + T.ccomb_rank[pext12(T, umask, nm)]) * 16u + pext12(T, omask, emask);
 }
 
+
 template <int EP, int EO>
 __device__ __forceinline__ u64 table_index_k(const Tables& T, const u32* __restrict__ classidx, const State& s) {
     u32 packed = classidx[corner_raw(T, s)];
@@ -313,7 +314,60 @@ __device__ __forceinline__ u32 block_lb(const u32* __restrict__ blk, u64 idx) {
     u64 b = idx / BLOCK_ENTRIES;
     u32 pos = 8u + 2u * (u32)(idx - b * BLOCK_ENTRIES);
     const u32* p = blk + b * 8u;
+#ifdef CACHE_HINT
+    // Streaming loads (evict first): table reads have no reuse, and should not
+    // push the small hot tables (corner classes) out of L1/L2.
+    return (__ldcs(p) & 0xFFu) + ((__ldcs(p + (pos >> 5)) >> (pos & 31u)) & 3u);
+#else
     return (p[0] & 0xFFu) + ((p[pos >> 5] >> (pos & 31u)) & 3u);
+#endif
+}
+
+// Threshold-bit table: one bit per 208 entry, set when the distance is at
+// least BIT_CUT; otherwise the bound comes from the 304 block table.  Both
+// are coset lower bounds of subgroups containing every U and D turn.
+#ifndef BIT_CUT
+#define BIT_CUT 11u
+#endif
+// Bit test; when clear, also the 304 index for a deferred fallback read.
+__device__ __forceinline__ bool bit_test(const Tables& T, const u32* __restrict__ classidx,
+                                         const u32* __restrict__ bits, const State& s, u64& j304);
+
+__device__ __forceinline__ u32 bit_lb(const Tables& T, const u32* __restrict__ classidx,
+                                      const u32* __restrict__ bits, const u32* __restrict__ fb,
+                                      const State& s) {
+    u64 j;
+    return bit_test(T, classidx, bits, s, j) ? BIT_CUT : block_lb(fb, j);
+}
+
+__device__ __forceinline__ bool bit_test(const Tables& T, const u32* __restrict__ classidx,
+                                         const u32* __restrict__ bits, const State& s, u64& j304) {
+    // One conjugation for both indices: 208 for the bit, 304 for the fallback.
+    u32 packed = classidx[corner_raw(T, s)];
+    int sym = packed & 15u;
+    u32 e[3];
+#pragma unroll
+    for (int w = 0; w < 3; ++w) {
+        u32 x = __byte_perm(s.e0, s.e1, T.cs_sel01[sym][w]);
+        u32 y = __byte_perm(s.e2, s.e2, T.cs_sel2[sym][w]);
+        u32 v = ((x & ~T.cs_mask[sym][w]) | (y & T.cs_mask[sym][w])) ^ T.cs_flip[sym][w];
+        e[w] = relabel_word(v, T.cs_rel[sym][0], T.cs_rel[sym][1], T.cs_rel[sym][2]);
+    }
+    u32 m0 = gather_bit(e[0], 3), m1 = gather_bit(e[1], 3), m2 = gather_bit(e[2], 3);
+    u32 emask = m0 | (m1 << 4) | (m2 << 8);
+    u32 omask = gather_bit(e[0], 4) | (gather_bit(e[1], 4) << 4) | (gather_bit(e[2], 4) << 8);
+    u32 nm = ~emask & 0xFFFu;
+    u32 slice = T.slice_rank[emask];
+    u64 cls = packed >> 4;
+    u32 n0 = __popc(m0), n1 = __popc(m1);
+    u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
+               ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
+    u64 i = cls * N_EDGE_208 + (slice * 24u + T.eorder_rank[eord]) * 256u + pext12(T, omask, nm);
+    if ((bits[i >> 5] >> (i & 31u)) & 1u) return true;
+    u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
+                (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
+    j304 = cls * N_EDGE_304 + (slice * 70u + T.ccomb_rank[pext12(T, umask, nm)]) * 16u + pext12(T, omask, emask);
+    return false;
 }
 
 // Record an entry first reached at depth.  BFS claims in increasing depth,
@@ -1317,12 +1371,29 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
     u32 rem = 0;      // frames of the current child still to evaluate (ordered masks)
     u32 ord = 0;      // frame order masks of the current node
     int inherit = 0;  // inverse frame whose value carries over (move's axis)
+#ifdef TABLE_BIT
+    u64 fb_idx = ~0ull;  // deferred 304 fallback read for frame k (bit was clear)
+#endif
     u32 iter = 0;
+#ifdef PHASE_STATS
+    // Diagnostic: cycles per phase seen by lane 0 of each warp
+    // [0] control [1] index computation [2] waiting for the table read [3] rest of step [4] steps
+    unsigned long long ph[5] = {0, 0, 0, 0, 0};
+    unsigned long long ph2[4] = {0, 0, 0, 0};  // lane cycles in push, fetch+prefix, pick, pop
+    const bool timer = (threadIdx.x & 31) == 0;
+    long long t0 = clock64(), t1, t2, t3, t4;
+#endif
 
     for (;;) {
+#ifdef PHASE_STATS
+        t0 = clock64();
+#endif
         // ---- control: until this lane has a child frame to evaluate ----
         bool eval = false;
         while (!done) {
+#ifdef PHASE_STATS
+            long long tc = clock64();
+#endif
             if (m >= 0) {
                 if (k != 6 && k != 7) {  // still evaluating
                     eval = true;
@@ -1353,6 +1424,9 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                     }
                 }
                 m = -1;
+#ifdef PHASE_STATS
+                ph2[0] += clock64() - tc;
+#endif
                 continue;
             }
             if (!have_item) {
@@ -1386,7 +1460,11 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                         frame_do<6>(T, S, f[j], j, pm);
 #ifdef STEP_ALL_BLOCK
                         if (j != 3 + (pm / 3) % 3) {
+#ifdef TABLE_BIT
+                            u32 v = bit_lb(T, classidx, blk, x304, f[j]);
+#else
                             u32 v = block_lb(blk, table_index(T, classidx, f[j]));
+#endif
                             if (STEP_EXTRA >= 1) v = max(v, block_lb(x112, table_index_any(T, classidx, f[j], 1)));
                             if (STEP_EXTRA >= 2) v = max(v, block_lb(x304, table_index_any(T, classidx, f[j], 2)));
                             h[j] = (j < 3 && h[j]) ? max(v, h[j] - 1u) : v;
@@ -1416,6 +1494,9 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                     ord = frame_order(h, bound - g);
                 }
                 have_item = true;
+#ifdef PHASE_STATS
+                ph2[1] += clock64() - tc;
+#endif
                 continue;
             }
             if (todo && !((++iter & 1023u) == 0 && *(volatile u32*)&job->found)) {
@@ -1423,10 +1504,35 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
                 todo &= todo - 1;
                 ++nodes;
                 inherit = 3 + (m / 3) % 3;
-                c[inherit] = h[inherit];  // same coset in every table: no lookups
+                // Same coset in every table: no lookup.  (Unrolled so that h and c
+                // stay in registers; a run-time index would put them in local memory.)
+#pragma unroll
+                for (int j = 3; j < 6; ++j)
+                    if (j == inherit) c[j] = h[j];
                 rem = (ord | EXTRA_STEP_MASKS) & ~(0x41041u << inherit);
+#ifdef LAZY_FORWARD
+                {
+                    // Forward frames two or more below the budget edge cannot prune
+                    // this child; give them parent - 1 (still a bound) without a lookup.
+#ifndef LAZY_GAP
+#define LAZY_GAP 2
+#endif
+                    u32 lazy = 0;
+#pragma unroll
+                    for (int j = 0; j < 3; ++j) {
+                        if (h[j] + LAZY_GAP <= bound - g) {
+                            lazy |= 1u << j;
+                            c[j] = h[j] ? h[j] - 1u : 0u;
+                        }
+                    }
+                    rem &= ~(lazy | (lazy << 6) | (lazy << 12));
+                }
+#endif
                 k = next_frame(rem);
                 eval = true;
+#ifdef PHASE_STATS
+                ph2[2] += clock64() - tc;
+#endif
                 break;
             }
             // node exhausted (or cube solved elsewhere): pop, or finish the item
@@ -1445,8 +1551,15 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
             last = g > 0 ? path[g - 1] : -1;
             todo = amask[last + 1] & ~axis_move_mask(excluded_first_axes<6>(h, bound - g)) & ~((2u << pm) - 1u);
             ord = frame_order(h, bound - g);
+#ifdef PHASE_STATS
+            ph2[3] += clock64() - tc;
+#endif
         }
         if (__all_sync(0xFFFFFFFFu, done)) break;
+#ifdef PHASE_STATS
+        t1 = clock64();
+        if (timer) ph[0] += t1 - t0;
+#endif
         if (!eval) continue;
 
         // ---- one lookup step: frame k of child m ----
@@ -1456,6 +1569,27 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         const int fr = k & 7, tbl = k >> 3;
         u32 parent = pick_u32(h, fr);
         u32 v = parent;
+#ifdef TABLE_BIT
+        if (fb_idx != ~0ull) {
+            // Second step of a frame whose bit was clear: the fallback read.
+            v = block_lb(x304, fb_idx);
+            fb_idx = ~0ull;
+            if (fr < 3 && parent) v = max(v, parent - 1u);
+        } else {
+            State t = pick_state(f, fr);
+            int mk = S.frame_move[fr < 3 ? fr : fr - 3][m];
+            if (fr < 3) apply_move(T, t, mk);
+            else apply_left(T, t, inverse_move(mk));
+            u64 j;
+            if (!bit_test(T, classidx, blk, t, j)) {
+                fb_idx = j;  // read it next step: one memory read per lane per step
+                continue;
+            }
+            v = BIT_CUT;
+            if (fr < 3 && parent) v = max(v, parent - 1u);
+        }
+        if (false)
+#endif
         {
             State t = pick_state(f, fr);
             int mk = S.frame_move[fr < 3 ? fr : fr - 3][m];
@@ -1464,9 +1598,29 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
 #ifdef STEP_ALL_BLOCK
             // Block tables for every frame.  The main table comes first; forward
             // frames are also never below parent - 1; extra tables raise the value.
+#ifdef TABLE_BIT
             if (STEP_EXTRA == 0) {
+                v = bit_lb(T, classidx, blk, x304, t);  // blk holds the bit table here
+            } else
+#else
+            if (STEP_EXTRA == 0) {
+#ifdef PHASE_STATS
+                u64 pidx = table_index(T, classidx, t);
+                asm volatile("" :: "l"(pidx));
+                t2 = clock64();
+                v = block_lb(blk, pidx);
+                asm volatile("" :: "r"(v));
+                t3 = clock64();
+                if (timer) {
+                    ph[1] += t2 - t1;
+                    ph[2] += t3 - t2;
+                }
+#else
                 v = block_lb(blk, table_index(T, classidx, t));
-            } else {
+#endif
+            } else
+#endif
+            {
                 const u32* tb = tbl == 0 ? blk : (tbl == 1 ? x112 : x304);
                 v = block_lb(tb, table_index_any(T, classidx, t, tbl));
             }
@@ -1491,9 +1645,78 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
             if (j == fr) c[j] = v;
         }
         k = (g + 1 + v > bound) ? 7 : next_frame(rem);
+#ifdef PHASE_STATS
+        t4 = clock64();
+        if (timer) {
+            ph[3] += t4 - t3;
+            ph[4] += 1;
+        }
+#endif
     }
 #ifdef LANE_STATS
     if (stats)
         for (int i = 0; i < 16; ++i) atomicAdd(&stats[32 + i], lane_acc[i]);
 #endif
+#ifdef PHASE_STATS
+    if (stats && timer)
+        for (int i = 0; i < 5; ++i) atomicAdd(&stats[56 + i], ph[i]);
+    if (stats)
+        for (int i = 0; i < 4; ++i) atomicAdd(&stats[40 + i], ph2[i]);
+#endif
+}
+
+// Exact table distance at given indices: the block value, with "at least
+// min + 3" resolved by the mod-3 table (research and validation).
+extern "C" __global__ void exact_at(const u32* __restrict__ table, const u32* __restrict__ blk,
+                                    const u64* __restrict__ idx, int n, unsigned char* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    u64 x = idx[i];
+    u64 b = x / BLOCK_ENTRIES;
+    u32 pos = 8u + 2u * (u32)(x - b * BLOCK_ENTRIES);
+    const u32* p = blk + b * 8u;
+    u32 mn = p[0] & 0xFFu;
+    u32 off = (p[pos >> 5] >> (pos & 31u)) & 3u;
+    u32 v = mn + off;
+    if (off == 3u) {
+        u32 m3 = table_get(table, x);
+        while (v % 3u != m3) ++v;
+    }
+    out[i] = (unsigned char)v;
+}
+
+
+// Build the threshold-bit table for words [w0, w0 + n_words) from the exact
+// 208 values (block table, "at least min + 3" resolved by the mod-3 table).
+extern "C" __global__ void build_bits(const u32* __restrict__ table, const u32* __restrict__ blk,
+                                      u64 w0, u64 n_words, u64 n_entries, u32 cut, u32* __restrict__ out) {
+    for (u64 w = blockIdx.x * (u64)blockDim.x + threadIdx.x; w < n_words; w += (u64)gridDim.x * blockDim.x) {
+        u32 word = 0;
+        for (int j = 0; j < 32; ++j) {
+            u64 x = (w0 + w) * 32u + j;
+            if (x >= n_entries) break;
+            u64 b = x / BLOCK_ENTRIES;
+            u32 pos = 8u + 2u * (u32)(x - b * BLOCK_ENTRIES);
+            const u32* p = blk + b * 8u;
+            u32 v = (p[0] & 0xFFu) + ((p[pos >> 5] >> (pos & 31u)) & 3u);
+            if (v - (p[0] & 0xFFu) == 3u) {
+                u32 m3 = table_get(table, x);
+                while (v % 3u != m3) ++v;
+            }
+            word |= (u32)(v >= cut) << j;
+        }
+        out[w] = word;
+    }
+}
+
+// Threshold-bit lower bounds for packed states (root bounds, validation).
+extern "C" __global__ void probe_bit(const Tables* __restrict__ gT, const u32* __restrict__ classidx,
+                                     const u32* __restrict__ bits, const u32* __restrict__ fb,
+                                     const u32* __restrict__ states, int n, u32* __restrict__ out) {
+    __shared__ Tables T;
+    load_tables(T, gT);
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    State s{states[5 * i], states[5 * i + 1], states[5 * i + 2], states[5 * i + 3], states[5 * i + 4]};
+    out[i] = bit_lb(T, classidx, bits, fb, s);
 }

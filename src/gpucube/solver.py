@@ -74,7 +74,8 @@ class Solution:
 class GpuSolver:
     def __init__(self, table_path: Path, prefix_len: int = 4, grid: int | None = None, block: int = 256,
                  inverse: bool = True, collect_stats: bool = False, mode: str = "step",
-                 extra_tables: int = 2, step_extra: int = 0):
+                 extra_tables: int = 2, step_extra: int = 0, table_format: str = "block",
+                 step_defines: tuple[str, ...] = ()):
         """``mode``: "step" (default: step-machine kernel, block table only),
         "forward" (mod-3 table for the axis frames, block table for inverses),
         "multi" (block tables only: 208 plus ``extra_tables`` of 112 and 304),
@@ -92,7 +93,16 @@ class GpuSolver:
             self.table = None
         else:
             self.table = load_device(table_path, n_words)
-        if self.inverse:
+        self.table_format = table_format
+        if table_format == "bit":
+            # "blk" holds the threshold-bit table; the 304 block table is the fallback.
+            if mode != "step" or step_extra:
+                raise ValueError("table_format='bit' needs mode='step' without extra tables")
+            self.blk = load_device(table_path.with_name(f"{table_path.stem}-bit11.bin"), (n_entries + 31) // 32)
+            k304 = coords.EdgeKind(3, 4)
+            self.fallback = load_device(table_path.with_name("prune-ud-304-blk.bin"),
+                                        block_words(self.dt.n_classes * k304.n_edge))
+        elif self.inverse:
             self.blk = load_device(table_path.with_name(f"{table_path.stem}-blk.bin"), block_words(n_entries))
         else:
             self.blk = self.table
@@ -116,7 +126,10 @@ class GpuSolver:
         if mode == "multi":
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
         elif mode == "step":
-            self.k_search = module("STEP_ALL_BLOCK", f"STEP_EXTRA={len(self.extra)}").get_function("search_step")
+            defines = ("STEP_ALL_BLOCK", f"STEP_EXTRA={len(self.extra)}") + tuple(step_defines)
+            if table_format == "bit":
+                defines += ("TABLE_BIT",)
+            self.k_search = module(*defines).get_function("search_step")
         else:
             self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
@@ -129,7 +142,11 @@ class GpuSolver:
         words = pack_states(np.stack([p[0] for p in packed]), np.stack([p[1] for p in packed]))
         n = len(all_frames)
         out = cp.zeros(n, dtype=cp.uint32)
-        if self.mode in ("bidir", "multi", "step"):
+        if self.table_format == "bit":
+            module().get_function("probe_bit")(((n + 127) // 128,), (128,),
+                                               (self.dt.tables, self.dt.classidx, self.blk, self.fallback,
+                                                cp.asarray(words), np.int32(n), out))
+        elif self.mode in ("bidir", "multi", "step"):
             d_words = cp.asarray(words)
             self.k_block(((n + 127) // 128,), (128,),
                          (self.dt.tables, self.blk, self.dt.classidx, d_words, np.int32(n), out))
@@ -175,6 +192,8 @@ class GpuSolver:
                     tables = (self.blk, xs[0], xs[1])
                 elif self.mode == "bidir":
                     tables = (self.blk,)
+                elif self.mode == "step" and self.table_format == "bit":
+                    tables = (self.blk, self.blk, self.blk, self.fallback)
                 elif self.mode == "step":
                     xs = [blk for _, blk in self.extra] + [self.blk] * (2 - len(self.extra))
                     tables = (self.blk, self.blk, xs[0], xs[1])

@@ -87,6 +87,25 @@ back, so parity suffices). Build the base-3 table from RAM at the end.
 ≈ 4–6 min, needs an 8 GB GPU and ≈ 16 GB RAM. More complex than 1c for
 little gain; superseded by 1c.
 
+### 1e. Threshold bit + small exact fallback (implemented; slower than hoped)
+
+From `research/learned_table/`: one bit per entry, d ≥ 11, and the 304
+table (1.4 GB) when the bit is clear. 5.2 GB in total; avg6 11.844 versus
+11.862 exact. Implemented as `--table-format bit`
+(`gpucube.table.build_bit_table`, kernel define `TABLE_BIT`; the fallback
+read is deferred to the lane's next step).
+
+Measured on the 1,000 positions (RTX 5060 Ti, register cap
+`SEARCH_MIN_BLOCKS=2`): **17.2 cubes/s versus 28.0** for the 2-bit block
+table, identical lengths and node counts. The search is memory-bound and
+the bit table needs 4.03 lookup steps per child versus 2.48: capping 12
+at 11 loses many first-lookup prunes, plus ~0.5 fallback reads per child.
+Lesson: average bounds (avg1/avg6) do not predict speed here; lookups per
+child do.
+
+Use for cards with ≈ 6 GB; for 8 GB cards base-3 (1a) should be faster,
+since it keeps 12 distinct in most blocks (94% exact). Not yet measured.
+
 ### Rejected for 8 GB
 
 - **GPU reading a table in host RAM over PCIe.** Measured 60 M random
@@ -103,6 +122,39 @@ little gain; superseded by 1c.
 
 ## 2. Further speed on 16 GB
 
+**Profile (Nsight Compute 2026.2, `bench/profile_step.py 10 17`, a
+bound-17 round as in real solves; `GPUCUBE_LINEINFO=1` for source
+attribution).** DRAM throughput 122 GB/s = one DRAM sector per table
+lookup at 3.8 G sectors/s, the random-read ceiling measured on this card
+(`bench/gpu_gather.py`). Compute 66%, 9 active threads per warp on
+average (70% of warp instructions run with < 8 lanes: the divergent
+control code), local memory 7% of L2 sectors and mostly hits. The search
+is memory-bound; instruction-side changes do not move it. (An earlier
+profile of a bound-16 round, with only ~27 children per work item,
+looked compute-bound — prefix replay and control dominated there — and
+was not representative.)
+
+Measured with no gain on the 1,000 positions (all correct, off by
+default where kept):
+
+| Variant | Cubes/s (baseline 27.6–27.8) | Why |
+|---|---|---|
+| Lazy forward frames (`LAZY_FORWARD`, gap 2/3/4) | 28.1 / 27.8 / 27.3 | lookups saved = nodes added |
+| Streaming cache hints (`CACHE_HINT`) | 26.9 | nothing was being evicted |
+| Reuse child inverse frames at push (removed) | 27.7 | not instruction-bound |
+| Saved-frame pop stack (removed) | 26.8 | not instruction-bound |
+| `h`/`c` arrays out of local memory (kept) | 27.8 | local traffic was cache hits |
+
+**Sibling locality: none.** A U turn keeps every corner orientation
+value but moves corners between positions, so the twist coordinate — and
+with it the corner class, the top of the table index — changes for most
+moves; siblings land billions of entries apart (measured: 0.0% of lookups
+share a sector with the lane's previous lookup of the same frame). This
+rules out block-parallel IDA* style cooperative expansion for memory
+reasons.
+
+Remaining ideas on this card:
+
 - The step kernel is at the DRAM random-access ceiling (≈ 2.5 lookups
   per child, ≈ 3.7 G lookups/s against a measured 3.85 G/s); gains must
   come from fewer lookups or more information per lookup.
@@ -111,6 +163,23 @@ little gain; superseded by 1c.
   Would need a much cheaper way to decide which survivors to recheck.
 - Base-3 encoding (1a) frees 1.6 GB on 16 GB cards; only useful if the
   extra-table problem is solved.
+
+## 2b. Other GPU solvers
+
+[GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks) (commit
+`4889310f`, Dec 2023; coursework project): quarter-turn metric, 12
+moves, IDA* with a per-cubie "Manhattan" heuristic, one 24-thread block
+per subproblem with a shared-memory stack (after arXiv:1705.02843).
+Its README reports 13.4 s per cube for 13-quarter-turn scrambles on an
+unnamed GPU and recommends depths up to 15. Built here with CUDA 13
+(`sm_120`) and with CUDA 12.8 in Pascal-compatible mode
+(`compute_60` → `sm_120`): its GPU solver did not finish 5–7 of 12
+depth-8 scrambles within 20 s (only cubes solvable in ≤ 6 moves
+finished), while its CPU solver worked — most likely a warp-synchronous
+assumption broken on post-Volta GPUs. gpucube solves the same scramble
+distribution (`data/gpurubiks/`, half-turn metric) in 0.2–0.3 ms per
+cube up to 13 quarter turns and 4 ms at 20. Nothing to adopt (see
+sibling locality above).
 
 ## 3. Larger cards (24–32 GB)
 
@@ -121,7 +190,19 @@ variant (`EdgeKind(3, 8)`, tested); generation needs either a ≥ 48 GB
 GPU or the CPU generator (1c) on a ≥ 48 GB machine. Untested on this
 hardware.
 
-## 4. Publishing
+Threshold-bit variant (research/learned_table): `308` as one bit
+"≥ q" is 11 GB; with the `112` fallback (2.6 GB) it fits 16 GB cards.
+Whether it beats `208` depends on the `308` value distribution — needs
+the table built first.
+
+## 4. Neural/tensor-core table compression (tested, negative)
+
+Small and large MLPs predicting the 208 table from its coordinates reach
+only the majority-class accuracy (65%); learned per-entry cuts are no
+better than a constant. Tensor cores have no role in this design. See
+`research/learned_table/README.md`.
+
+## 5. Publishing
 
 - No license yet (needed before making the repository public).
 - Claims supported so far: on this desktop, 3.7× vcube and 4.7× nxopt

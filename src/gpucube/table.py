@@ -123,3 +123,30 @@ def build(out_dir: Path, kind: coords.EdgeKind = coords.K208, log=print) -> Path
     }
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2) + "\n")
     return path
+
+
+def build_bit_table(table_dir: Path, cut: int = 11, log=print) -> Path:
+    """One bit per 208 entry: distance >= cut.  Built from the mod-3 and block
+    tables (both must exist); written in chunks so it fits next to them."""
+
+    import cupy as cp
+
+    dt = DeviceTables()
+    n_entries = dt.n_classes * coords.K208.n_edge
+    mod3 = load_device(table_dir / "prune-ud-208.bin", (n_entries + 15) // 16)
+    blk = load_device(table_dir / "prune-ud-208-blk.bin", block_words(n_entries))
+    n_words = (n_entries + 31) // 32
+    kern = module().get_function("build_bits")
+    out = cp.empty(CHUNK_WORDS, dtype=cp.uint32)
+    path = table_dir / f"prune-ud-208-bit{cut}.bin"
+    set_bits = 0
+    with open(path, "wb") as fh:
+        for w0 in range(0, n_words, CHUNK_WORDS):
+            n = min(CHUNK_WORDS, n_words - w0)
+            kern((GRID,), (BLOCK,), (mod3, blk, np.uint64(w0), np.uint64(n), np.uint64(n_entries),
+                                     np.uint32(cut), out))
+            chunk = out[:n].get()
+            set_bits += int(np.unpackbits(chunk.view(np.uint8)).sum())
+            chunk.tofile(fh)
+    log(f"{path}: {n_words * 4 / 2**30:.2f} GiB, bit set for {set_bits / n_entries:.4f} of entries")
+    return path

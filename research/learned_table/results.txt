@@ -1,0 +1,18 @@
+208 exact (7.8 GB)                 avg1 10.9205  avg6+axis 11.8622
+304 fallback alone (1.4 GB)        avg1 10.2892  avg6+axis 11.1221
+constant cut q=11                  avg1 10.8148  avg6+axis 11.8439  bit set 0.801  memory 5.20 GB
+cut per corner class               avg1 10.8148  avg6+axis 11.8439  bit set 0.801  memory 5.20 GB
+cut per (class, slice)             avg1 10.8259  avg6+axis 11.8328  bit set 0.749  memory 5.20 GB
+NN small: 7,296 MACs per lookup (MLP part)
+  epoch 1: loss 1.1218 (2s)
+  epoch 2: loss 0.9076 (3s)
+  epoch 3: loss 0.9039 (5s)
+  NN small: argmax accuracy 0.652, within 1: 0.981
+NN small                           avg1 10.8163  avg6+axis 11.8430  bit set 0.797  memory 5.20 GB
+NN large: 458,240 MACs per lookup (MLP part)
+  epoch 1: loss 0.9646 (18s)
+  epoch 2: loss 0.8783 (35s)
+  epoch 3: loss 0.8531 (53s)
+  epoch 4: loss 0.8433 (71s)
+  NN large: argmax accuracy 0.660, within 1: 0.984
+NN large                           avg1 10.8352  avg6+axis 11.8415  bit set 0.769  memory 5.20 GB
