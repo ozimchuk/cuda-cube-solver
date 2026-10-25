@@ -11,7 +11,9 @@ optimal solvers on the same machine:
 - **one cube at a time: ~30× faster than vcube, ~40× faster than nxopt**
   (median 23 ms per random position versus 0.76 s and 0.98 s);
 - **1,000 cubes in bulk: 3.6× faster than vcube, 4.6× faster than nxopt**
-  (27.7 versus 7.6 and 6.0 cubes/s),
+  (27.7 versus 7.6 and 6.0 cubes/s);
+- **hardest positions (20 moves): ~50× faster than vcube, ~65× faster
+  than nxopt** (median 1.5 s versus 75 s and 100 s per cube),
 
 with a table a third the size of theirs (7.8 GB versus 21–23 GB).
 
@@ -166,6 +168,43 @@ By optimal solution length (median time per cube):
 
 Raw outputs: `data/single_cube/`.
 
+### Worst case: positions that need 20 moves
+
+No position needs more than 20 moves, and random scrambles almost never
+need 20, so the tables above do not show the worst case. These runs use
+known distance-20 positions from <https://cube20.org/distance20s/>, one
+cube at a time as above.
+
+| 10 positions (`random10.txt`) | Median | Worst | Total |
+|---|---|---|---|
+| nxopt `EO2,EP3`, 1 thread | 99.5 s | 104.6 s | 974 s |
+| vcube `308`, 1 thread | 74.8 s | 124.0 s | 770 s |
+| **cuda-cube-solver** | **1.53 s** | **1.69 s** | **15.3 s** |
+
+On the 100 positions in `random100.txt` cuda-cube-solver takes a median
+of 1.54 s and at most 1.97 s per cube; the CPU solvers were not run on
+those.
+
+The superflip (every edge flipped in place) is much harder than a
+typical 20-mover for all three solvers: the shared table design sees
+little of its distance, so the search starts from a bound of 6 instead
+of ~12.
+
+| Superflip | Time |
+|---|---|
+| vcube `308`, 1 thread | 808 s |
+| nxopt `EO2,EP3`, 1 thread | 720 s |
+| **cuda-cube-solver** | **51.5 s** |
+| cuda-cube-solver + `112` table (`bench/run_gpu.py --step-extra 1`) | 10.3 s |
+
+The extra `112` table (`cuda-cube-solver build-table --kind 112`,
++2.6 GB VRAM) makes positions like the superflip about 5× faster but
+everything else slower: 2.00 s instead of 1.53 s median on the 10
+positions above, and about 1.5× slower on random scrambles. It is
+therefore not the default.
+
+Raw outputs and inputs: `data/distance20/`.
+
 ### Reading these numbers
 
 - The single-cube gap (~30–40×) is larger than the bulk gap (~4×)
@@ -253,7 +292,8 @@ no code from them is included here):
 
 Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
 `nxopt23 -t 1 -` on the first 100 positions; cuda-cube-solver with
-`bench/run_gpu.py --count 100 --batch 1`.
+`bench/run_gpu.py --count 100 --batch 1`. The distance-20 and superflip
+runs use the same commands.
 
 ## License
 

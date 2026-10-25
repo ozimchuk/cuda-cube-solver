@@ -1,0 +1,10 @@
+0 124.015192171 20 L' F' U' B  R  U  D  F' U  R2 F' U2 R2 B  R' B  L2 F2 R  B
+1 66.020706413 20 R' D2 F' B' R' F  U  L' F' R' U2 B2 R2 D' L  F  U  L' F  L
+2 72.145955018 20 L2 B' R' D' L2 F  L  B  D2 R' F' R2 U  L  D2 L2 F2 B  D' R2
+3 74.885433200 20 R  F  B' L  B' D' B  U  F' L' U  D  L' B  U  L' D2 L2 U' D'
+4 74.906410561 20 R' F' L' B  R2 D  R' F2 D' B2 D  L2 B2 L2 D' F  B  L2 B  L2
+5 76.275654273 20 R' F  U  R2 D2 F  R' D' B  D' R  L' D' F2 D  F2 R2 D  R2 U'
+6 70.932524972 20 L' D' R' F' U' B  L2 B  R' L2 U  R  U' D' R' F' U  B  U2 B'
+7 74.743050264 20 B  R  B2 U  F  U  B2 L  F' L' F  U' L' D2 B  R2 L' D2 B' L'
+8 76.361450123 20 B' L  U' D' R' U' D2 L2 B  R  F2 R2 D  B' D' L  F2 U  R2 L
+9 59.690844516 20 D  L' U2 F  U  R' U' R2 U' D2 L2 F' R2 U' B  R2 B2 R2 B  D'
