@@ -114,16 +114,33 @@ match ours on all 100 positions.
 | copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.277 s** |
 | 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.53 s** |
 | Superflip | 1,148 s | **48.7 s** | 51.5 s (10.3 s with the `112` table) |
+| 1,000 random positions | ≈0.19 cubes/s (estimated) | 1.20 cubes/s (833 s) | **27.7 cubes/s** (36.2 s) |
+
+**No bulk mode:** neither competitor can search several cubes at once. Each
+solves one cube after another on the whole GPU, so its bulk rate is 1,000
+divided by the sum of its single-cube times.
+
+- Hayakawa's rate was measured on all 1,000 positions: median 0.542 s and
+  worst 6.15 s per cube, with lengths identical to ours.
+- copy-optsolver's rate was not measured, because the run would take about
+  90 minutes. The estimate takes its mean time per optimal length on the
+  first 100 positions (16: 0.06 s, 17: 0.48 s, 18: 5.0 s, 19: 58.5 s, the
+  last from a single cube) and weights it by the length distribution of the
+  1,000.
 
 **Hayakawa's solver** is the closer competitor:
 
 - It is about 25× slower on random positions and 19× slower on distance-20
   positions.
-- It is slightly faster than cuda-cube-solver's default on the superflip.
-- Its CPU threads handle 7–9% of the search. With one CPU thread its times
-  are about the same on random and distance-20 positions, and 8% slower on
-  the superflip (53.1 s). Its superflip result therefore comes from its
-  table, not the CPU.
+- Its CPU threads handle 7–9% of the search:
+  - With one CPU thread, its times are about the same on random and
+    distance-20 positions, and 8% slower on the superflip (53.1 s).
+  - Using the CPU alone, it is about 10× slower: 199 s for the first 20
+    random positions, against 19.4 s with the GPU.
+- The superflip is the only case where it beats cuda-cube-solver's default
+  (48.7 s against 51.5 s), and only with its 11 CPU threads helping. On the
+  GPU alone it takes 53.1 s, against 51.5 s for cuda-cube-solver, which
+  uses the GPU only.
 
 **copy-optsolver** reports 1.30 s for the 19-mover and 38.2 s for the
 superflip on an RTX 4090. Its search depends on the hot part of its table
@@ -151,6 +168,27 @@ Raw outputs: `data/other_gpu/`.
 - **Single machine only:** on large servers, vcube reports 55 cubes/s
   (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores, 256 GB).
   cuda-cube-solver has not been run on comparable GPU hardware.
+
+## Outside material in this repository
+
+No source code from any other project is included; every compared solver
+was built outside this repository. The only outside material is:
+
+- **cube20.org data:** `data/distance20/random10.txt` and `random100.txt`,
+  lists of known distance-20 positions from
+  <https://cube20.org/distance20s/>.
+- **Measurements of other solvers:** their raw outputs, recorded on this
+  machine, in `data/` and its subfolders.
+- **Ideas, reimplemented independently:**
+  - the table's coordinate, the one used by nxopt (`EO2,EP2`) and vcube
+    (`208`);
+  - the coset axis rule from nxopt's documentation;
+  - the facelet-string layout of the `kociemba` package. Its README's
+    example string is used as a test case, and an optional test compares
+    against the package when it is installed.
+
+`data/gpurubiks/` was generated here with GPU-Rubiks' 11-move set; it was
+not copied from that project.
 
 ## Builds and commands
 

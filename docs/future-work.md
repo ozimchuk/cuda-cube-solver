@@ -203,8 +203,10 @@ better than a constant. Tensor cores have no role in this design. See
 
 ## 5. Publishing
 
-- No license yet (needed before making the repository public).
-- Claims supported so far: on this desktop, 3.7× vcube and 4.7× nxopt
-  on 1,000 random positions with identical optimal lengths. Not
+- Licensed MIT.
+- Claims supported so far: on this desktop, 3.6× vcube and 4.6× nxopt
+  on 1,000 random positions with identical optimal lengths, and 19–25×
+  the fastest other public GPU solver on random and distance-20
+  positions (see `docs/benchmarks.md`). Not
   supported: "fastest in the world" (vcube reports 55 cubes/s on a
   32-core, 170 GB server).

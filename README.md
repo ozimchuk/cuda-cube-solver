@@ -15,8 +15,8 @@ All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
 | Random position, median | 0.976 s | 0.763 s | 4.13 s | 0.570 s | **0.023 s** |
 | Random position, worst of 100 | 17.4 s | 7.92 s | 58.5 s | 4.65 s | **0.263 s** |
 | 20-move position, median of 10 | 99.5 s | 74.8 s | ~590 s | 29.4 s | **1.53 s** |
-| Superflip | 720 s | 808 s | 1,148 s | **48.7 s** | 51.5 s |
-| 1,000 random positions, whole machine | 6.0 cubes/s | 7.6 cubes/s | — | — | **27.7 cubes/s** |
+| Superflip | 720 s | 808 s | 1,148 s | **48.7 s**¹ | 51.5 s |
+| 1,000 random positions, whole machine | 6.0 cubes/s | 7.6 cubes/s | ≈0.19 cubes/s² | 1.20 cubes/s | **27.7 cubes/s** |
 | Table | 22.7 GB RAM | 21.2 GiB RAM | 0.9 GB | 3.5 GB | 7.8 GB VRAM |
 
 - **Projects compared:**
@@ -31,10 +31,21 @@ All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
 - **CPU threads:** vcube and nxopt search a single cube on one thread, so the
   rows above use one thread for them. In bulk they solve 12 cubes in
   parallel, and the gap shrinks to 3.6–4.6×.
-- **The superflip** is the one case where another solver is faster than the
-  default. With the optional `112` table (`--step-extra 1`, +2.6 GB VRAM),
-  cuda-cube-solver solves it in 10.3 s, but that makes everything else
-  slower.
+- **No parallel bulk mode in the GPU competitors:** they solve one cube after
+  another, each using the whole GPU, so their bulk rate is 1,000 divided by
+  the sum of single-cube times.
+  - Hayakawa's 1.20 cubes/s was measured on all 1,000 positions.
+  - ² copy-optsolver's rate is an estimate, not a measurement: its mean
+    time per optimal length on the first 100 positions, weighted by the
+    length distribution of the 1,000 (about 90 minutes in total).
+- ¹ **The superflip** is the one case where another solver is faster than
+  the default, and only with help from the CPU:
+  - Hayakawa's 48.7 s uses the GPU plus 11 CPU threads. On the GPU alone it
+    takes 53.1 s, slower than cuda-cube-solver's 51.5 s, which uses the GPU
+    only.
+  - With the optional `112` table (`--step-extra 1`, +2.6 GB VRAM),
+    cuda-cube-solver solves it in 10.3 s, but that makes everything else
+    slower.
 
 Full tables, methods, builds and raw outputs are in
 [`docs/benchmarks.md`](docs/benchmarks.md).
