@@ -1,40 +1,60 @@
 # cuda-cube-solver — optimal 3×3 solving on the GPU
 
-Finds the **shortest possible solution** of a Rubik's cube (optimal in
-the half-turn metric, where a half turn such as `U2` counts as one move;
-random positions need 16–19 moves) on an NVIDIA GPU. It keeps a 7.3 GiB
-pattern database in GPU memory and runs IDA* search on the GPU.
+Finds the **shortest possible solution** of a Rubik's cube on an NVIDIA GPU.
+Solutions are optimal in the half-turn metric, where a half turn such as `U2`
+counts as one move; random positions need 16–19 moves. The solver keeps a
+7.3 GiB pattern database in GPU memory and runs an IDA* search on the GPU.
 
-On a desktop with an RTX 5060 Ti 16 GB, against the two fastest open CPU
-optimal solvers on the same machine:
+## How it compares
 
-- **one cube at a time: ~30× faster than vcube, ~40× faster than nxopt**
-  (median 23 ms per random position versus 0.76 s and 0.98 s);
-- **1,000 cubes in bulk: 3.6× faster than vcube, 4.6× faster than nxopt**
-  (27.7 versus 7.6 and 6.0 cubes/s);
-- **hardest positions (20 moves): ~50× faster than vcube, ~65× faster
-  than nxopt** (median 1.5 s versus 75 s and 100 s per cube),
+All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
+5060 Ti 16 GB. Times are per cube, solved one at a time.
 
-with a table a third the size of theirs (7.8 GB versus 21–23 GB). On the
-same GPU it is also 19–25× faster on random and 20-move positions than
-the fastest other public GPU optimal solver found
-([details](#other-gpu-solvers)).
+| | nxopt (CPU) | vcube (CPU) | copy-optsolver (GPU) | Hayakawa (GPU + CPU) | **cuda-cube-solver** |
+|---|---|---|---|---|---|
+| Random position, median | 0.976 s | 0.763 s | 4.13 s | 0.570 s | **0.023 s** |
+| Random position, worst of 100 | 17.4 s | 7.92 s | 58.5 s | 4.65 s | **0.263 s** |
+| 20-move position, median of 10 | 99.5 s | 74.8 s | ~590 s | 29.4 s | **1.53 s** |
+| Superflip | 720 s | 808 s | 1,148 s | **48.7 s** | 51.5 s |
+| 1,000 random positions, whole machine | 6.0 cubes/s | 7.6 cubes/s | — | — | **27.7 cubes/s** |
+| Table | 22.7 GB RAM | 21.2 GiB RAM | 0.9 GB | 3.5 GB | 7.8 GB VRAM |
+
+- **Projects compared:**
+  - [vcube](https://github.com/Voltara/vcube) and
+    [nxopt](https://github.com/rokicki/cube20src) are the fastest open CPU
+    optimal solvers.
+  - [copy-optsolver](https://github.com/cmsxbc/copy-optsolver) and
+    [Hayakawa's solver](https://github.com/h-hayakawa/rubiks_cube) are the
+    other public GPU optimal solvers found.
+- **Same answers:** every solver returns the same optimal length for every
+  position.
+- **CPU threads:** vcube and nxopt search a single cube on one thread, so the
+  rows above use one thread for them. In bulk they solve 12 cubes in
+  parallel, and the gap shrinks to 3.6–4.6×.
+- **The superflip** is the one case where another solver is faster than the
+  default. With the optional `112` table (`--step-extra 1`, +2.6 GB VRAM),
+  cuda-cube-solver solves it in 10.3 s, but that makes everything else
+  slower.
+
+Full tables, methods, builds and raw outputs are in
+[`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Requirements
 
 | | To solve | To build the table (once) |
 |---|---|---|
 | NVIDIA GPU | Turing (RTX 20-series) or newer, ≥ 9 GB VRAM | ≥ 16 GB VRAM |
-| Disk | 7.3 GiB (`prune-ud-208-blk.bin`) | 14.3 GiB for both table files |
+| Disk | 7.3 GiB | 14.3 GiB |
 | Host RAM | ~2 GB | ~2 GB |
 
-- Linux, Python ≥ 3.11, an NVIDIA driver supporting CUDA 13 (R580 or
-  newer), CuPy 14. Developed and measured only on an RTX 5060 Ti (16 GB)
-  under Ubuntu.
-- Building the table takes about 2 minutes on that card. Cards with less
-  than 16 GB can solve with a table built elsewhere (copy
-  `prune-ud-208-blk.bin`); see [8 GB cards](docs/future-work.md#1-supporting-8-gb-cards)
-  for options under consideration.
+You also need:
+
+- Linux;
+- Python ≥ 3.11;
+- an NVIDIA driver supporting CUDA 13 (R580 or newer);
+- CuPy 14.
+
+It has been developed and measured only on an RTX 5060 Ti under Ubuntu.
 
 ## Quick start
 
@@ -43,67 +63,57 @@ git clone https://gitlab.com/ozimchuk/cuda-cube-solver.git
 cd cuda-cube-solver
 python3 -m venv .venv
 .venv/bin/pip install -e '.[test]'
-# CuPy also needs CUDA headers if no CUDA toolkit is installed system-wide:
-.venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'
+.venv/bin/pip install 'cupy-cuda13x[ctk]==14.2.0'   # CUDA headers, if no CUDA toolkit is installed
 
-.venv/bin/cuda-cube-solver build-table      # writes tables/ (~2 min, 16 GB VRAM; see below)
+.venv/bin/cuda-cube-solver build-table              # once: ~2 min, writes tables/
+echo "R U R' U' F2 D L2 B' R2 U F' L D2 R' B U2 F L'" | .venv/bin/cuda-cube-solver solve
+# 1 17 F L F2 D2 L2 B R' U' F U B' L' B2 R D' R2 D2
 ```
 
 ### Building the table
 
-Solving needs a pruning table that is generated once, on the GPU:
+`build-table` runs a breadth-first search on the GPU, in about 2 minutes on
+an RTX 5060 Ti. Use `--out DIR` to write somewhere other than `tables/`.
 
-```bash
-.venv/bin/cuda-cube-solver build-table              # or: --out /path/to/dir (default: tables/)
-```
+It writes three files:
 
-- **Needs** a GPU with 16 GB of VRAM, ~2 GB of host RAM and 14.3 GiB of
-  free disk. Takes about 2 minutes on an RTX 5060 Ti.
-- **Writes** `prune-ud-208-blk.bin` (7.3 GiB, the only file solving
-  reads), `prune-ud-208.bin` (7.0 GiB, needed only to rebuild variants)
-  and `prune-ud-208.json` (per-depth entry counts and timing).
-- **Progress** is printed per breadth-first-search depth (13 depths). The
-  build checks itself before writing: the entry counts must add up and
-  every table block must be filled, otherwise it stops with an error.
-  The counts can also be compared with the
-  [expected values](docs/development-notes.md#expected-table-contents),
-  which match vcube's `208` table generator.
-- **Smaller GPUs** (≥ 9 GB, Turing or newer) can solve but not build:
-  copy `prune-ud-208-blk.bin` from a machine with a 16 GB card into a
-  `tables/` folder (or point `--tables` at it). No prebuilt download is
-  published yet.
-- `--kind 112` / `--kind 304` build extra tables used only by
-  experimental modes; they are not needed.
+- `prune-ud-208-blk.bin` (7.3 GiB): the only file solving reads.
+- `prune-ud-208.bin` (7.0 GiB): needed only to rebuild table variants.
+- `prune-ud-208.json`: entry counts and timing for each depth.
+
+The build checks itself before writing and stops with an error if the
+check fails. Its per-depth counts match vcube's generator; the
+[expected values](docs/development-notes.md#expected-table-contents) are
+listed in the development notes.
+
+**Cards with 9–15 GB** can solve but not build. Copy
+`prune-ud-208-blk.bin` from a machine with a 16 GB card; no prebuilt
+download is published yet. Options for 8 GB cards are in
+[future-work.md](docs/future-work.md#1-supporting-8-gb-cards).
 
 ### Solving
 
-Solve a scramble (the cube it produces from solved), a 54-sticker
-facelet string, or a whole file — one cube per line on stdin:
-
 ```bash
-echo "R U R' U' F2 D L2 B' R2 U F' L D2 R' B U2 F L'" | .venv/bin/cuda-cube-solver solve
-# 1 17 F L F2 D2 L2 B R' U' F U B' L' B2 R D' R2 D2
-
 echo "DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD" | .venv/bin/cuda-cube-solver solve
 # 1 18 R2 D2 R' F U2 R' B' D' R U2 F R' D' R' U2 L2 F B2
 
 .venv/bin/cuda-cube-solver solve < cubes.txt > solutions.txt
 ```
 
-- **Output:** `<line number> <length> <moves>` per cube, in input order;
-  applying `<moves>` to the cube solves it. Invalid lines print
-  `<line number> error <reason>` (e.g. a twisted corner) and the rest
-  still run. Several optimal solutions usually exist, and repeated runs
-  may return a different one of the same length.
-- **Facelet strings** use the common U R F D L B face order (as in the
-  `kociemba` package and Cube Explorer); any six symbols work, since the
-  centres define the faces, so colour letters such as `W G R …` are fine.
-- **Startup:** each invocation loads the table (1–5 s) before solving,
-  so pipe many cubes into one run rather than calling it per cube.
-- `cuda-cube-solver solve --help` lists the options. Tables are read
-  from `tables/` (change with `--tables`); solving needs only
-  `prune-ud-208-blk.bin`, so the other files can be left out or deleted
-  after building.
+- **Input:** one cube per line, either as a scramble (the moves that produce
+  it from solved) or as a 54-sticker facelet string.
+  - Facelet strings use the U R F D L B face order of the `kociemba` package
+    and Cube Explorer.
+  - Any six symbols work, because the centres define the faces.
+- **Output:** one line per cube, in input order: `<line> <length> <moves>`.
+  Applying `<moves>` to the cube solves it.
+  - Invalid lines print `<line> error <reason>`, and the rest still run.
+  - Several optimal solutions usually exist, and repeated runs may return a
+    different one.
+- **Startup:** each run loads the table first (1–5 s), so pipe many cubes
+  into one run rather than starting it once per cube.
+- **Options:** run `solve --help`. `--tables DIR` points to a table folder
+  other than `tables/`.
 
 From Python:
 
@@ -112,239 +122,55 @@ from pathlib import Path
 from cuda_cube_solver.facelets import parse_facelets
 from cuda_cube_solver.solver import GpuSolver
 
-solver = GpuSolver(Path("tables"))   # loads tables/prune-ud-208-blk.bin
+solver = GpuSolver(Path("tables"))
 solution = solver.solve([parse_facelets("DRLUUBFBRBLURRLRUBLRDDFDLFUFUFFDBRDUBRUFLLFDDBFLUBLRBD")])[0]
 print(len(solution.moves), solution.text())
 ```
 
-## Comparison with vcube and nxopt
-
-Machine: Ryzen 5 9600X (6 cores, 12 threads, 30 GB RAM), RTX 5060 Ti
-16 GB. Other programs paused; transparent huge pages `always` for the
-CPU solvers; solve time only (table loading excluded for every solver).
-All three solvers return the same optimal length for every position.
-Baseline builds and commands are listed under [Baselines](#baselines).
-
-### Bulk: 1,000 random positions
-
-`data/random1000.txt` (40 random moves each). Each solver uses the whole
-machine: vcube and nxopt solve 12 cubes at a time, one per thread;
-cuda-cube-solver searches batches of 100 cubes on the GPU.
-
-| Solver | Table | Time | Cubes/s | cuda-cube-solver speedup |
-|---|---|---|---|---|
-| nxopt `EO2,EP3` (`nxopt23`), 12 threads | 22.7 GB RAM | 166.3 s | 6.01 | 4.6× |
-| vcube `308`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 | 3.6× |
-| **cuda-cube-solver** (default) | 7.8 GB VRAM | **36.2 s** | **27.7** | — |
-
-Optimal lengths: 3× 15, 27× 16, 278× 17, 659× 18, 33× 19 moves.
-Raw outputs: `data/cuda-cube-solver_1000.txt`, `data/vcube308_quiet_1000.txt`,
-`data/nxopt23_quiet_1000.txt`.
-
-### One cube at a time: first 100 of those positions
-
-The first 100 lines of `data/random1000.txt` — a subset because the
-CPU solvers need 1–1.5 s per position on one thread. Their optimal
-lengths (2× 16, 32× 17, 65× 18, 1× 19) are close to the full set's
-distribution, with slightly fewer 19-movers, so absolute times are a
-little optimistic for all three solvers alike.
-
-Time to solve a single cube with nothing else queued. vcube and nxopt
-search one cube on one thread (they parallelise only across cubes), so
-they run with one worker here; cuda-cube-solver spreads one cube over the whole
-GPU (43,254 work items per cube).
-
-| Solver | Median | 90th percentile | Worst | Mean |
-|---|---|---|---|---|
-| nxopt `EO2,EP3`, 1 thread | 0.976 s | 3.09 s | 17.4 s | 1.53 s |
-| vcube `308`, 1 thread | 0.763 s | 2.32 s | 7.92 s | 1.08 s |
-| **cuda-cube-solver** | **0.023 s** | **0.072 s** | **0.263 s** | **0.034 s** |
-
-By optimal solution length (median time per cube):
-
-| Optimal length | Cubes | nxopt | vcube | cuda-cube-solver |
-|---|---|---|---|---|
-| 16 | 2 | 0.03 s | 0.02 s | 0.002 s |
-| 17 | 32 | 0.17 s | 0.13 s | 0.009 s |
-| 18 | 65 | 1.35 s | 0.95 s | 0.036 s |
-| 19 | 1 | 10.1 s | 7.92 s | 0.263 s |
-
-Raw outputs: `data/single_cube/`.
-
-### Worst case: positions that need 20 moves
-
-No position needs more than 20 moves, and random scrambles almost never
-need 20, so the tables above do not show the worst case. These runs use
-known distance-20 positions from <https://cube20.org/distance20s/>, one
-cube at a time as above.
-
-| 10 positions (`random10.txt`) | Median | Worst | Total |
-|---|---|---|---|
-| nxopt `EO2,EP3`, 1 thread | 99.5 s | 104.6 s | 974 s |
-| vcube `308`, 1 thread | 74.8 s | 124.0 s | 770 s |
-| **cuda-cube-solver** | **1.53 s** | **1.69 s** | **15.3 s** |
-
-On the 100 positions in `random100.txt` cuda-cube-solver takes a median
-of 1.54 s and at most 1.97 s per cube; the CPU solvers were not run on
-those.
-
-The superflip (every edge flipped in place) is much harder than a
-typical 20-mover for all three solvers: the shared table design sees
-little of its distance, so the search starts from a bound of 6 instead
-of ~12.
-
-| Superflip | Time |
-|---|---|
-| vcube `308`, 1 thread | 808 s |
-| nxopt `EO2,EP3`, 1 thread | 720 s |
-| **cuda-cube-solver** | **51.5 s** |
-| cuda-cube-solver + `112` table (`bench/run_gpu.py --step-extra 1`) | 10.3 s |
-
-The extra `112` table (`cuda-cube-solver build-table --kind 112`,
-+2.6 GB VRAM) makes positions like the superflip about 5× faster but
-everything else slower: 2.00 s instead of 1.53 s median on the 10
-positions above, and about 1.5× slower on random scrambles. It is
-therefore not the default.
-
-Raw outputs and inputs: `data/distance20/`.
-
-### Other GPU solvers
-
-The two other public GPU optimal solvers found, built and run on the same
-RTX 5060 Ti, one cube at a time. All three return the same optimal
-lengths on the 100 positions.
-
-- [copy-optsolver](https://github.com/cmsxbc/copy-optsolver) (C++/CUDA
-  port of Kociemba's optimal solver, ~0.9 GB of tables).
-- [h-hayakawa/rubiks_cube](https://github.com/h-hayakawa/rubiks_cube)
-  (the solver behind Hayakawa et al., "GPU-acceleration of optimal
-  permutation-puzzle solving", PASCO 2015; 3.5 GB table; the GPU and 11
-  CPU threads share the search).
-
-| | copy-optsolver | Hayakawa | **cuda-cube-solver** |
-|---|---|---|---|
-| First 100 random positions, median | 4.13 s | 0.570 s | **0.023 s** |
-| First 100 random positions, mean | 3.99 s | 0.740 s | **0.034 s** |
-| First 100 random positions, worst | 58.5 s | 4.65 s | **0.263 s** |
-| copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.277 s** |
-| 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.53 s** |
-| Superflip | 1,148 s | **48.7 s** | 51.5 s (10.3 s with the `112` table) |
-
-- Hayakawa's solver is the closer competitor: about 25× slower on
-  random positions and 19× on distance-20 positions, and slightly faster
-  on the superflip than cuda-cube-solver's default. Its CPU threads
-  handle 7–9% of the search; with one CPU thread the times are about the
-  same on random and distance-20 positions and 8% slower on the superflip
-  (53.1 s), so its superflip result comes from its table, not the CPU.
-- copy-optsolver reports 1.30 s for the 19-mover and 38.2 s for the
-  superflip on an RTX 4090. Its search depends on the table's hot part
-  staying in L2 cache (72 MB on the 4090, 32 MB here), which is why it is
-  about 30× slower on this card.
-
-Raw outputs: `data/other_gpu/`; builds under [Baselines](#baselines).
-
-### Reading these numbers
-
-- The single-cube gap (~30–40×) is larger than the bulk gap (~4×)
-  because the CPU solvers use one of 12 threads for a single cube.
-- These are single-machine numbers. On large servers vcube reports 55
-  cubes/s (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores,
-  256 GB); cuda-cube-solver has not been run on comparable GPU hardware.
-- [GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks), another public
-  GPU solver, solves in the quarter-turn metric with a small
-  per-cubie heuristic and is meant for scrambles up to ~15 moves; on this
-  GPU its solver did not finish cubes needing 8 or more quarter turns
-  (see `docs/future-work.md`). cuda-cube-solver solves its scramble distribution
-  (`data/gpurubiks/`) in 0.3 ms per cube at 13 quarter turns, but in the
-  half-turn metric, so this is not a like-for-like comparison.
-
 ## How it works
 
-**Why a GPU.** An optimal solver is limited by random lookups into a
-large table. Measured on this machine (`bench/cpu_gather.c`,
-`bench/gpu_gather.py`): 0.71–0.75 G random lookups/s on 12 CPU threads
-versus 3.85 G/s on the GPU.
+- **Why a GPU:** an optimal solver is limited by random lookups into a large
+  table. This GPU does 3.85 G random lookups/s, against 0.71–0.75 G/s on 12
+  CPU threads of this machine (`bench/gpu_gather.py`, `bench/cpu_gather.c`).
+- **Table:** an independent implementation of the coset coordinate used by
+  nxopt (`EO2,EP2`) and vcube (`208`). It has 30.2 billion entries, reduced
+  by the 16 symmetries that keep the U–D axis.
+  - It is stored as blocks: each 32-byte memory sector holds an 8-bit minimum
+    and 124 two-bit offsets.
+  - These are exact for 99.6% of entries.
+- **Search:** IDA* with six table lookups per position: the position turned
+  so each of its three axes becomes the U–D axis, plus the inverse of each.
+  - A coset rule from nxopt's documentation uses these lookups to exclude
+    whole axes of first moves.
+  - Each cube is split into 43,254 work items, so a single cube already fills
+    the GPU.
+  - Every GPU lane does exactly one lookup per step.
+- **Limit:** profiling shows one DRAM sector read per lookup, at the card's
+  random-read ceiling. Speed therefore scales with memory, not computation.
 
-**Table.** An independent implementation of the coset coordinate used by
-nxopt (`EO2,EP2`) and vcube (`208`): corner twist × which positions hold
-U-layer corners, reduced by the 16 symmetries that keep the U–D axis
-(9,930 classes); E-slice edge positions × their order × flips of the
-other eight edges. 30,199,910,400 entries. One GPU breadth-first search
-(≈ 2 minutes) writes `prune-ud-208-blk.bin` (7.3 GiB, used for solving:
-per 32-byte memory sector an 8-bit minimum and 124 two-bit offsets,
-exact for 99.6% of entries) and `prune-ud-208.bin` (7.0 GiB, distances
-mod 3, used during generation and by experimental modes). Per-depth entry
-counts match vcube's generator exactly.
-
-**Search.** IDA* with six lookups per position: the position turned so
-each of its three axes becomes the U–D axis, and the inverse of each. A
-coset rule from nxopt's documentation, re-derived for this table, uses
-those lookups to exclude whole axes of first moves and to add one to the
-bound when all three axes agree. Each cube is split into 43,254 work
-items (one per canonical 4-move start), so a single cube already fills
-the GPU; many cubes can be searched together. In the kernel every lane
-does exactly one table lookup per step, and moves and symmetry
-conjugation are byte-permute (`prmt`) instructions on a packed state.
-
-**Limit.** Profiling a representative search round with Nsight Compute
-shows one DRAM sector per table lookup at this card's random-read
-ceiling (122 GB/s): the solver is bound by memory reads, not computation.
-Faster memory or a card large enough for the next table size are the
-paths to more speed. The history of the design and the experiments that
-did not pay off are in [`docs/development-notes.md`](docs/development-notes.md).
+Design history and measured dead ends are in
+[`docs/development-notes.md`](docs/development-notes.md). Postponed options,
+such as 8 GB cards, a CPU table generator and larger cards, are in
+[`docs/future-work.md`](docs/future-work.md).
 
 ## Portability
 
-- NVIDIA GPUs from Turing (sm_75) on, the oldest generation CUDA 13
-  supports; kernels are compiled at run time for the installed GPU
-  (NVRTC via CuPy), and the launch grid scales with its SM count. The
-  kernels only need Pascal-era instructions, so older cards should work
-  with a CUDA 12 build of CuPy (`cupy-cuda12x`) — untested.
-- Only measured on an RTX 5060 Ti. Throughput should scale roughly with
-  a card's random-memory-read rate. Cards with 24–32 GB could hold
-  nxopt's next table size (`EO2,EP3`, 22.7 GB), which needs ~2.3× fewer
-  nodes on CPUs; not implemented or tested.
+- **Supported GPUs:** Turing (sm_75) or newer, the oldest generation CUDA 13
+  supports.
+  - Kernels are compiled at run time for the installed GPU (NVRTC via CuPy),
+    and the launch grid scales with its SM count.
+  - Older cards might work with `cupy-cuda12x`; this is untested.
+- **Measured hardware:** only an RTX 5060 Ti. Speed should scale roughly with
+  a card's random-memory-read rate.
+- **Larger cards:** cards with 24–32 GB could hold nxopt's next table size
+  (22.7 GB); this is not implemented.
 
 ## Development
 
 ```bash
-.venv/bin/pytest                                     # unit tests (GPU, no tables needed)
+.venv/bin/pytest                                                        # unit tests (GPU, no tables needed)
 .venv/bin/python bench/run_gpu.py data/random1000.txt --count 1000 --batch 100
 ```
-
-`docs/development-notes.md` records the design history and measured dead
-ends; `docs/future-work.md` the postponed options (8 GB cards, a CPU
-table generator, larger cards); `research/learned_table/` a negative
-result on neural-network table compression.
-
-## Baselines
-
-Built outside this repository and used only as benchmarks (both GPL-3.0;
-no code from them is included here):
-
-- vcube, <https://github.com/Voltara/vcube>, commit `9f5bc2cc`, clang 22
-  `-O3 -mlzcnt -mbmi -mbmi2 -mavx2`; `./vc-optimal -c 308 --ordered`.
-- nxopt from cube20src, <https://github.com/rokicki/cube20src>, commit
-  `f430921a`, `g++ -DPS=16 -O3 -march=native -DHALF -DTHREADS -DEO2 -DEP3`;
-  `nxopt23 -t 12 -` with moves converted to `U1R3…` (`data/random1000.nxopt.txt`).
-
-Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
-`nxopt23 -t 1 -` on the first 100 positions; cuda-cube-solver with
-`bench/run_gpu.py --count 100 --batch 1`. The distance-20 and superflip
-runs use the same commands.
-
-Other GPU solvers (neither has a license; built outside this repository
-and only run for benchmarks), with CUDA 13.4 `nvcc` for `sm_120` and
-g++ 13:
-
-- copy-optsolver, commit `2278a4d`: its CPU build to generate the
-  tables, then its `c++/cuda` build; `gpu_solve -b` with one scramble per
-  line. Its `parity_test 50000` passes on this card.
-- Hayakawa's rubiks_cube, commit `4d9e834`, with `N_GPU 1` and
-  `N_THREADS 12` in `solver_settings.h` (6 made no difference). Its
-  `main.c` only solves random cubes it generates itself, so a small local
-  driver feeds it the same scrambles through its `solve()` and checks each
-  solution. Table generation took 82 minutes.
 
 ## License
 

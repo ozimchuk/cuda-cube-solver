@@ -23,8 +23,7 @@ three codes mean *≤ b* (bound `m`), *b + 1*, and *≥ b + 2*; the cut is
 chosen per block to maximise the sum of encoded bounds. The result is
 still an admissible coset lower bound, so the axis rule stays valid.
 
-Measured on 20,000 random positions (six frames each, same method as the
-README's averages):
+Measured on 20,000 random positions (six frames each):
 
 | Encoding | Size | avg1 | avg6 + axis rule | entries exact |
 |---|---|---|---|---|

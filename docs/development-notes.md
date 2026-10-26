@@ -19,7 +19,7 @@ are in [`future-work.md`](future-work.md).
 | Step-machine kernel, per-node frame order, block table only (lane efficiency 99%, half the VRAM) | 28.0 |
 
 Later re-measurements of the final kernel give 27.6–27.8 cubes/s; the
-README uses the most recent run (27.7).
+README and `docs/benchmarks.md` use the most recent run (27.7).
 
 ## Expected table contents
 
