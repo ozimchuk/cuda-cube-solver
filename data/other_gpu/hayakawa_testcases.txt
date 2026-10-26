@@ -1,0 +1,2 @@
+0 10.008 19 B R2 F2 D2 B' L' F' B U' R' U2 R' U L' F2 B U R' D
+1 48.674 20 U R U2 R F2 L U2 R F' B' R2 D B2 U2 F2 L R' F R2 D

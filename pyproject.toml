@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "cuda-cube-solver"
 version = "0.1.0"
 description = "Optimal half-turn-metric 3x3 Rubik's cube solver: IDA* on the GPU with a GPU-resident pattern database"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["numpy>=1.26", "cupy-cuda13x>=14,<15"]
 
 [project.optional-dependencies]

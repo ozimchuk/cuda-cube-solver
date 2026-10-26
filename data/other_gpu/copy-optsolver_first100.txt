@@ -1,0 +1,201 @@
+U D2 R2 L F2 B' R F2 D R U L2 D' B' L2 F2 R' D'
+[gpu_solve] length=18 togo=18 total=4.101s verify=OK
+D2 L D' R2 L2 U' R L D2 F' B U' R B L' F2 D2
+[gpu_solve] length=17 togo=17 total=0.562s verify=OK
+U2 R' U R' B2 L' U' F2 D L' D R D2 F R' B U' R B
+[gpu_solve] length=19 togo=19 total=58.489s verify=OK
+D L' B' U2 B R2 U2 F2 U2 F' R' U2 B2 D' R' F R'
+[gpu_solve] length=17 togo=17 total=0.347s verify=OK
+R' L2 F' R2 U' F' U' D B2 U2 F L F D' R L2 F D
+[gpu_solve] length=18 togo=18 total=4.999s verify=OK
+U' F2 B U' L B2 L' B2 U L D2 B L' D2 F D L D'
+[gpu_solve] length=18 togo=18 total=4.652s verify=OK
+R B U' R' F' L' U' L2 F U R L F2 L' U B R2 D
+[gpu_solve] length=18 togo=18 total=5.121s verify=OK
+U F2 L F U2 F U' F L2 B' R' D2 F2 U R2 L' D2 L2
+[gpu_solve] length=18 togo=18 total=5.461s verify=OK
+L2 B R2 F L' F2 L' B2 U2 B R B D2 R2 D2 F D
+[gpu_solve] length=17 togo=17 total=0.803s verify=OK
+U L F' R' F D2 F L' F2 L2 U' B2 U2 B' D R' F L2
+[gpu_solve] length=18 togo=18 total=3.572s verify=OK
+U F D' B' R U B' L' D F U2 D B2 D2 F' L U D
+[gpu_solve] length=18 togo=18 total=3.917s verify=OK
+D B R2 U2 L' U F' D2 F D' F U2 B' D2 R2 L U
+[gpu_solve] length=17 togo=17 total=0.484s verify=OK
+U2 F2 B2 U' D F R2 U' F2 R2 U2 F' U' B U2 R' L2 B2
+[gpu_solve] length=18 togo=18 total=5.658s verify=OK
+R2 U' B U D2 R' D L F' B' R' D' R2 F' D2 B L2
+[gpu_solve] length=17 togo=17 total=0.398s verify=OK
+F B2 D' F2 B R2 F2 D' R2 L' D' F2 L' D2 L' U F' D'
+[gpu_solve] length=18 togo=18 total=6.079s verify=OK
+R U' B R2 U2 L' U' B L' D F' R U' L' U D F R'
+[gpu_solve] length=18 togo=18 total=3.428s verify=OK
+F U2 F' B2 U' B' U D' L' U' F R' U2 F' R' L2 U2 D'
+[gpu_solve] length=18 togo=18 total=5.462s verify=OK
+U F B2 U2 F B' R U' D' L' B' R F2 L F R2 U D2
+[gpu_solve] length=18 togo=18 total=4.135s verify=OK
+U' F R2 D L D2 R' B' D' L2 F' L2 D' B2 L D2 R' L'
+[gpu_solve] length=18 togo=18 total=3.752s verify=OK
+D L' F' L2 B R F R' L D2 R2 B2 U' D2 F2 D' R2 B2
+[gpu_solve] length=18 togo=18 total=6.840s verify=OK
+U L' F' D R' U2 D2 R U R2 D' R B L' B D2 F' R'
+[gpu_solve] length=18 togo=18 total=4.938s verify=OK
+R' B R F2 L' F2 B2 D B D2 L' F R B2 D' F2 B2 R'
+[gpu_solve] length=18 togo=18 total=4.577s verify=OK
+F U2 R F' B' L U' L2 F L U R2 U2 D' F' B2 D2 F
+[gpu_solve] length=18 togo=18 total=3.986s verify=OK
+D2 R' F' D2 B' U' F D F' D F2 R' L' D' R' B R' F
+[gpu_solve] length=18 togo=18 total=3.640s verify=OK
+R' L D L' B' U R U F2 U2 L F B R' D L2 D'
+[gpu_solve] length=17 togo=17 total=0.429s verify=OK
+F' U' F' D L B2 U' F' R' U2 B L2 F R2 L2 F' R'
+[gpu_solve] length=17 togo=17 total=0.496s verify=OK
+L2 U' R2 F' R' F' L2 U' R2 D2 L B' R L' D2 B' D2 F
+[gpu_solve] length=18 togo=18 total=5.701s verify=OK
+F2 R' B L D' R U' L' D L' U L2 U2 L U B2 R'
+[gpu_solve] length=17 togo=17 total=0.433s verify=OK
+U B D2 L' F L' B2 L2 F B2 D2 F2 U F' U R F R
+[gpu_solve] length=18 togo=18 total=9.176s verify=OK
+R2 F' D' F' L U2 R' L2 B D B2 R2 F2 B2 U' D B R2
+[gpu_solve] length=18 togo=18 total=4.351s verify=OK
+F D F2 B2 R' L2 D' F B2 R' U L F B R2 L' B' R
+[gpu_solve] length=18 togo=18 total=4.167s verify=OK
+F2 R L2 D L' F' B' D' F U2 R L U' R2 F R2 U'
+[gpu_solve] length=17 togo=17 total=0.374s verify=OK
+U' F' D' R L' B' R F R F2 L' D B' D B U2 D2 F
+[gpu_solve] length=18 togo=18 total=4.286s verify=OK
+R2 U2 L' F' R' F L' F' B R' F2 B' R U B L B'
+[gpu_solve] length=17 togo=17 total=0.628s verify=OK
+R2 D B2 D L F' B R' U' L' F' U R2 L' U' F' U2 B2
+[gpu_solve] length=18 togo=18 total=5.058s verify=OK
+L F2 R' U2 R2 F R F2 R2 U F R' B2 D2 F D R2
+[gpu_solve] length=17 togo=17 total=0.422s verify=OK
+U2 B' U L2 U' D2 L2 U B' R' D R' L2 B' U' F2 D B
+[gpu_solve] length=18 togo=18 total=6.285s verify=OK
+R2 F' U' D2 B2 D B' L' D2 L D R L2 U' F2 R2 L'
+[gpu_solve] length=17 togo=17 total=0.347s verify=OK
+U L' U' B' U R D R U2 D B2 L' U2 L2 F U' R' D
+[gpu_solve] length=18 togo=18 total=5.426s verify=OK
+R2 D' B U2 L D2 R' D F' L' B' D B L F' B' R D
+[gpu_solve] length=18 togo=18 total=4.395s verify=OK
+U' R' B L2 U2 F2 B' D2 B R D2 B2 L2 D' L2 U' L' F
+[gpu_solve] length=18 togo=18 total=5.152s verify=OK
+B2 R' B' D2 F U' F' B' L' F B D' R' U2 F2 R' F' B2
+[gpu_solve] length=18 togo=18 total=4.062s verify=OK
+R U2 B' D2 F2 L F' U2 L' D' B2 L2 D2 F L' B2 U
+[gpu_solve] length=17 togo=17 total=0.530s verify=OK
+U2 R2 B L' B L2 B2 R D B R' U2 B D F' R2 U
+[gpu_solve] length=17 togo=17 total=0.383s verify=OK
+U2 D2 L U2 L' F' B D2 R' D F' R2 U' B2 U' R F2 U'
+[gpu_solve] length=18 togo=18 total=5.198s verify=OK
+L2 B' U D R D R' U2 F' B' L2 F2 B2 D R2 F' L' F'
+[gpu_solve] length=18 togo=18 total=5.229s verify=OK
+F L2 D' B' D2 F B L D L' B U' B D' R F' L2 D'
+[gpu_solve] length=18 togo=18 total=4.262s verify=OK
+U F2 R D B' U B2 U' D2 R2 B' D' R' B' U' F' B D2
+[gpu_solve] length=18 togo=18 total=4.113s verify=OK
+R' U2 R2 F L D2 L' U B2 U D2 F L' F D' B R2 L
+[gpu_solve] length=18 togo=18 total=5.743s verify=OK
+U D F' L B' D' L2 D B' D' F U F' R L2 D R2 L2
+[gpu_solve] length=18 togo=18 total=6.872s verify=OK
+R' F2 R2 B2 D' L' F2 L B' R U2 F D2 F L D2 R2 B2
+[gpu_solve] length=18 togo=18 total=6.678s verify=OK
+F U2 B' U' R U2 L B L2 D' B' R2 U D' L' B' U
+[gpu_solve] length=17 togo=17 total=0.416s verify=OK
+R2 L2 U L B2 R2 U2 D R' F2 R' B2 R F' U F' L
+[gpu_solve] length=17 togo=17 total=0.581s verify=OK
+B R2 U R2 D' L' U' L2 U2 B' D2 R D F R2 U2 B
+[gpu_solve] length=17 togo=17 total=0.591s verify=OK
+R F2 U' L' D R2 F B' L' B2 D' B R2 L U' F2 L' F
+[gpu_solve] length=18 togo=18 total=3.545s verify=OK
+B D F2 L2 B2 R2 D2 F L B R U B L F2 L' B2
+[gpu_solve] length=17 togo=17 total=0.509s verify=OK
+U F' U F2 U2 L D R' L B2 R' D' B2 R2 B' U2 L2 D'
+[gpu_solve] length=18 togo=18 total=5.756s verify=OK
+U2 F' U R' U F B' R' U' B D2 F' B2 D' R U' F2 U2
+[gpu_solve] length=18 togo=18 total=4.236s verify=OK
+U' F' R2 D2 B R' L2 U L F2 U B R' L D F2 L' D2
+[gpu_solve] length=18 togo=18 total=7.913s verify=OK
+F2 R B2 U' B U' L' D R' B2 L2 F' U' B R' B R
+[gpu_solve] length=17 togo=17 total=0.436s verify=OK
+R2 D' F' D2 L' B' R' F' R F' B2 U2 R2 D B L' D2 L
+[gpu_solve] length=18 togo=18 total=4.343s verify=OK
+F L' D B2 R' U F L2 U R' U2 L2 U2 D L F' U2 B2
+[gpu_solve] length=18 togo=18 total=5.699s verify=OK
+U' F B U' R' F L' F D2 F' D' B2 R' D F L' F2 L2
+[gpu_solve] length=18 togo=18 total=4.292s verify=OK
+R L F' R2 F' R' L2 D2 F R2 L' D F U' F2 L2 D2 F2
+[gpu_solve] length=18 togo=18 total=3.884s verify=OK
+U2 L' U2 F D2 F' B' U R U2 R' F' U' D2 B2 D R'
+[gpu_solve] length=17 togo=17 total=0.370s verify=OK
+R2 F U R U B L' D2 L' F B2 L' B D B' L' U2 F'
+[gpu_solve] length=18 togo=18 total=5.928s verify=OK
+U2 B2 R2 B' D2 B D' F' U' L2 B R U' R F L2 B' D2
+[gpu_solve] length=18 togo=18 total=6.050s verify=OK
+L' U R F U' L2 B U2 D2 R2 L D' B' R U2 D R
+[gpu_solve] length=17 togo=17 total=0.285s verify=OK
+U F2 L' F2 U2 D2 R F' L' F' D' F U2 L2 U' R D
+[gpu_solve] length=17 togo=17 total=0.308s verify=OK
+R' U D B' R' F B' U2 F B L' B L F R2 U' B' U2
+[gpu_solve] length=18 togo=18 total=5.013s verify=OK
+F D' F' L F L' U2 D2 L U2 F U B2 D' R' U D'
+[gpu_solve] length=17 togo=17 total=0.501s verify=OK
+B2 L U' B' R F R2 U' D F2 D2 F' D2 B' D' R2
+[gpu_solve] length=16 togo=16 total=0.077s verify=OK
+U B U R B D2 F R L U' R2 F2 D B' U' L2 F L2
+[gpu_solve] length=18 togo=18 total=4.320s verify=OK
+U L2 B D' L F' R2 U' R2 U2 F2 U2 B L' D' B2 R2 B'
+[gpu_solve] length=18 togo=18 total=4.426s verify=OK
+U' B2 U L2 B2 R2 U' F D L' B' L2 F L' F2 U2 R' D'
+[gpu_solve] length=18 togo=18 total=5.634s verify=OK
+L D2 L2 D2 B R2 L B' L2 U' F' U F D R2 L2 D'
+[gpu_solve] length=17 togo=17 total=0.838s verify=OK
+F2 R L' B2 L2 U D' R L2 U F R2 F2 B L' F2 D2 R2
+[gpu_solve] length=18 togo=18 total=5.232s verify=OK
+F2 R' B U' B2 R' F2 B' R D L B U' D2 F D2 R B
+[gpu_solve] length=18 togo=18 total=5.049s verify=OK
+U' F2 U2 R F' B U' F' R2 L B2 R2 B D2 F D2 L' U'
+[gpu_solve] length=18 togo=18 total=5.174s verify=OK
+D B' L' D' F2 B2 U' R' U' B' R U' B D' B' U R'
+[gpu_solve] length=17 togo=17 total=0.622s verify=OK
+R' U R' B' L' U' L' D F D' F' B L' B R F' D'
+[gpu_solve] length=17 togo=17 total=0.430s verify=OK
+L2 U2 R B' U' B U L' F' R B D F U' B2 L
+[gpu_solve] length=16 togo=16 total=0.048s verify=OK
+R' F U' R' L2 B2 R' F U2 R' U' F L U' D R2 D2 L
+[gpu_solve] length=18 togo=18 total=4.951s verify=OK
+U' L2 F' D' B R D' R L' U L F R L2 F2 B2 U R'
+[gpu_solve] length=18 togo=18 total=3.816s verify=OK
+U2 R' L2 B R' U2 R B U2 L' U' R2 F2 U F B' L2 D2
+[gpu_solve] length=18 togo=18 total=6.851s verify=OK
+U' L F D' F' U' B R2 B2 R F U' L2 B U2 L F2 B2
+[gpu_solve] length=18 togo=18 total=4.666s verify=OK
+U R' L2 D2 R L' U2 F' D F2 L U' B2 R' L F' L2 B'
+[gpu_solve] length=18 togo=18 total=3.831s verify=OK
+L D R B2 L' B2 R2 F L2 U B U' R' D F2 B' D'
+[gpu_solve] length=17 togo=17 total=0.367s verify=OK
+U2 L' U' R L U B2 R' U F U2 L' B2 L' D2 R' F2 D2
+[gpu_solve] length=18 togo=18 total=8.290s verify=OK
+R2 B' D2 F' R' B' U' L D2 L2 D F' U R D' B L2 U'
+[gpu_solve] length=18 togo=18 total=4.142s verify=OK
+L2 F2 L2 U2 D F' B' L B' U2 L F' U' L2 B2 L' D'
+[gpu_solve] length=17 togo=17 total=0.483s verify=OK
+F' B L' B' L D2 L' F2 R' U2 D' F L F U2 B' D2
+[gpu_solve] length=17 togo=17 total=0.406s verify=OK
+L2 F' R' U B2 D F L2 U' L D B2 R' D' B' U' R2
+[gpu_solve] length=17 togo=17 total=0.518s verify=OK
+R' F' U2 F2 U2 D' R F L2 U2 F L U' B' R' F2 U B
+[gpu_solve] length=18 togo=18 total=4.596s verify=OK
+F2 U' R2 F' U2 R' U L F2 R D L F U F2 U2 F2
+[gpu_solve] length=17 togo=17 total=0.557s verify=OK
+R' B L2 D2 B R U' F2 B' U2 F' B2 D' F' R2 F D' R'
+[gpu_solve] length=18 togo=18 total=4.132s verify=OK
+F' U B2 D' F' B D2 R' U' R2 U2 L F2 B2 D F' L2 B
+[gpu_solve] length=18 togo=18 total=4.046s verify=OK
+U' D F2 U' R' F' R F' U' B' L2 B' R' F2 R' L' F B2
+[gpu_solve] length=18 togo=18 total=3.927s verify=OK
+D' R F R2 D' F' R' F2 R L2 F' R L' F' B' D' F'
+[gpu_solve] length=17 togo=17 total=0.374s verify=OK
+U2 D B2 L' D2 F D' L' U R F' D' L U B L D' F
+[gpu_solve] length=18 togo=18 total=4.578s verify=OK
+[gpu_solve] batch: 100/100 solved, 398.639s wall (3.986s/solve avg)

@@ -1,0 +1,24 @@
+depth 14 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 3240 , phase2sum = 3240
+depth 15 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 43254 , phase2sum = 43254
+depth 16 , GPU : CPU rate = 0.9081 : 0.0919 cpu=53082 , gpu = 524288 , phase2sum = 577370
+depth 17 , GPU : CPU rate = 0.9244 : 0.0756 cpu=582656 , gpu = 7124361 , phase2sum = 7707017
+depth 18 , GPU : CPU rate = 0.9199 : 0.0801 cpu=8243200 , gpu = 94633672 , phase2sum = 102876872
+depth 19 , GPU : CPU rate = 0.9216 : 0.0784 cpu=107618304 , gpu = 1265630478 , phase2sum = 1373248782
+depth 20 , GPU : CPU rate = 0.9203 : 0.0797 cpu=12316672 , gpu = 142176256 , phase2sum = 154492928
+0 31.479 20 U R' B U' F2 R U2 L2 D L2 B' U' R F' U' F' D' B' L' F2
+depth 14 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 3240 , phase2sum = 3240
+depth 15 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 43254 , phase2sum = 43254
+depth 16 , GPU : CPU rate = 0.9081 : 0.0919 cpu=53082 , gpu = 524288 , phase2sum = 577370
+depth 17 , GPU : CPU rate = 0.9139 : 0.0861 cpu=663552 , gpu = 7043465 , phase2sum = 7707017
+depth 18 , GPU : CPU rate = 0.9216 : 0.0784 cpu=8065024 , gpu = 94811848 , phase2sum = 102876872
+depth 19 , GPU : CPU rate = 0.9213 : 0.0787 cpu=108105728 , gpu = 1265143054 , phase2sum = 1373248782
+depth 20 , GPU : CPU rate = 0.9194 : 0.0806 cpu=17375232 , gpu = 198078464 , phase2sum = 215453696
+1 32.167 20 U B U2 B2 U' B2 R F L B' L' D2 L' U R B2 L' F' U L2
+depth 14 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 3240 , phase2sum = 3240
+depth 15 , GPU : CPU rate = 1.0000 : 0.0000 cpu=0 , gpu = 43254 , phase2sum = 43254
+depth 16 , GPU : CPU rate = 0.9081 : 0.0919 cpu=53082 , gpu = 524288 , phase2sum = 577370
+depth 17 , GPU : CPU rate = 0.9178 : 0.0822 cpu=633225 , gpu = 7073792 , phase2sum = 7707017
+depth 18 , GPU : CPU rate = 0.9184 : 0.0816 cpu=8394752 , gpu = 94482120 , phase2sum = 102876872
+depth 19 , GPU : CPU rate = 0.9205 : 0.0795 cpu=109124608 , gpu = 1264124174 , phase2sum = 1373248782
+depth 20 , GPU : CPU rate = 0.9207 : 0.0793 cpu=4837376 , gpu = 56168448 , phase2sum = 61005824
+2 29.493 20 U R D2 L D' F R D L' D' B U L D' B D2 B' U2 L U2

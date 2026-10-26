@@ -15,7 +15,10 @@ optimal solvers on the same machine:
 - **hardest positions (20 moves): ~50× faster than vcube, ~65× faster
   than nxopt** (median 1.5 s versus 75 s and 100 s per cube),
 
-with a table a third the size of theirs (7.8 GB versus 21–23 GB).
+with a table a third the size of theirs (7.8 GB versus 21–23 GB). On the
+same GPU it is also 19–25× faster on random and 20-move positions than
+the fastest other public GPU optimal solver found
+([details](#other-gpu-solvers)).
 
 ## Requirements
 
@@ -205,6 +208,41 @@ therefore not the default.
 
 Raw outputs and inputs: `data/distance20/`.
 
+### Other GPU solvers
+
+The two other public GPU optimal solvers found, built and run on the same
+RTX 5060 Ti, one cube at a time. All three return the same optimal
+lengths on the 100 positions.
+
+- [copy-optsolver](https://github.com/cmsxbc/copy-optsolver) (C++/CUDA
+  port of Kociemba's optimal solver, ~0.9 GB of tables).
+- [h-hayakawa/rubiks_cube](https://github.com/h-hayakawa/rubiks_cube)
+  (the solver behind Hayakawa et al., "GPU-acceleration of optimal
+  permutation-puzzle solving", PASCO 2015; 3.5 GB table; the GPU and 11
+  CPU threads share the search).
+
+| | copy-optsolver | Hayakawa | **cuda-cube-solver** |
+|---|---|---|---|
+| First 100 random positions, median | 4.13 s | 0.570 s | **0.023 s** |
+| First 100 random positions, mean | 3.99 s | 0.740 s | **0.034 s** |
+| First 100 random positions, worst | 58.5 s | 4.65 s | **0.263 s** |
+| copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.277 s** |
+| 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.53 s** |
+| Superflip | 1,148 s | **48.7 s** | 51.5 s (10.3 s with the `112` table) |
+
+- Hayakawa's solver is the closer competitor: about 25× slower on
+  random positions and 19× on distance-20 positions, and slightly faster
+  on the superflip than cuda-cube-solver's default. Its CPU threads
+  handle 7–9% of the search; with one CPU thread the times are about the
+  same on random and distance-20 positions and 8% slower on the superflip
+  (53.1 s), so its superflip result comes from its table, not the CPU.
+- copy-optsolver reports 1.30 s for the 19-mover and 38.2 s for the
+  superflip on an RTX 4090. Its search depends on the table's hot part
+  staying in L2 cache (72 MB on the 4090, 32 MB here), which is why it is
+  about 30× slower on this card.
+
+Raw outputs: `data/other_gpu/`; builds under [Baselines](#baselines).
+
 ### Reading these numbers
 
 - The single-cube gap (~30–40×) is larger than the bulk gap (~4×)
@@ -212,8 +250,8 @@ Raw outputs and inputs: `data/distance20/`.
 - These are single-machine numbers. On large servers vcube reports 55
   cubes/s (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores,
   256 GB); cuda-cube-solver has not been run on comparable GPU hardware.
-- [GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks), the only other
-  public GPU solver found, solves in the quarter-turn metric with a small
+- [GPU-Rubiks](https://github.com/Nico-Adamo/GPU-Rubiks), another public
+  GPU solver, solves in the quarter-turn metric with a small
   per-cubie heuristic and is meant for scrambles up to ~15 moves; on this
   GPU its solver did not finish cubes needing 8 or more quarter turns
   (see `docs/future-work.md`). cuda-cube-solver solves its scramble distribution
@@ -295,6 +333,19 @@ Single-cube runs: `vc-optimal -c 308 --ordered --workers=1` and
 `bench/run_gpu.py --count 100 --batch 1`. The distance-20 and superflip
 runs use the same commands.
 
+Other GPU solvers (neither has a license; built outside this repository
+and only run for benchmarks), with CUDA 13.4 `nvcc` for `sm_120` and
+g++ 13:
+
+- copy-optsolver, commit `2278a4d`: its CPU build to generate the
+  tables, then its `c++/cuda` build; `gpu_solve -b` with one scramble per
+  line. Its `parity_test 50000` passes on this card.
+- Hayakawa's rubiks_cube, commit `4d9e834`, with `N_GPU 1` and
+  `N_THREADS 12` in `solver_settings.h` (6 made no difference). Its
+  `main.c` only solves random cubes it generates itself, so a small local
+  driver feeds it the same scrambles through its `solve()` and checks each
+  solution. Table generation took 82 minutes.
+
 ## License
 
-No license has been chosen yet, so all rights are reserved for now.
+MIT; see [`LICENSE`](LICENSE).
