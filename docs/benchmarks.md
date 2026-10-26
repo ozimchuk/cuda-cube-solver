@@ -80,16 +80,35 @@ its distance, so the search starts from a bound of 6 instead of about 12.
 | vcube `308`, 1 thread | 633 s |
 | nxopt `EO2,EP3`, 1 thread | 702 s |
 | **cuda-cube-solver** | **53.3 s** |
-| cuda-cube-solver + `112` table (`bench/run_gpu.py --step-extra 1`) | 10.3 s |
+| cuda-cube-solver, `solve --adaptive-extra` | 10.8 s |
 
 The extra `112` table (`cuda-cube-solver build-table --kind 112`, +2.6 GB
-VRAM) makes positions like the superflip about 5× faster, but it makes
-everything else slower:
+VRAM) makes positions like the superflip about 5× faster. Used on every
+cube (`bench/run_gpu.py --step-extra 1`), it makes everything else slower:
+2.00 s instead of 1.57 s median on the 10 positions above, and about 1.5×
+slower on random scrambles.
 
-- 2.00 s instead of 1.57 s median on the 10 positions above;
-- about 1.5× slower on random scrambles.
+`--adaptive-extra` avoids that cost. It compares each cube's starting bound
+with and without the extra table, and uses the table only when it raises
+the bound by 2 or more:
 
-It is therefore not the default.
+- **Superflip:** raised from 6 to 9.
+- **Normal positions:** raised by at most 1 on all 1,000 random and all 100
+  distance-20 positions, so the extra table is never used for them.
+
+| With `--adaptive-extra` | Result | Without |
+|---|---|---|
+| Superflip | 10.8 s | 53.3 s |
+| 1,000 random positions, bulk | 27.8 cubes/s, same lengths | 27.7 cubes/s |
+| First 100, one at a time, median / worst | 0.024 s / 0.283 s | 0.024 s / 0.284 s |
+| 100 distance-20 positions, median / worst | 1.56 s / 2.07 s | 1.56 s / 1.99 s |
+
+Both columns were measured on the same day. The extra table was never used
+for the random and distance-20 positions, so the small differences are
+run-to-run variation.
+
+The rule is checked only against these positions. Another position the
+extra table helps, but by less than 2 at the root, would run as before.
 
 **How the CPU solvers were timed here:** each solver runs all of these
 positions in one process (`warmup_random10_superflip.*`), with one random
@@ -127,7 +146,7 @@ match ours on all 100 positions.
 | First 100 random positions, worst | 58.5 s | 4.65 s | **0.284 s** |
 | copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.32 s** |
 | 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.57 s** |
-| Superflip | 1,148 s | **48.7 s** | 53.3 s (10.3 s with the `112` table) |
+| Superflip | 1,148 s | **48.7 s** | 53.3 s (10.8 s with `--adaptive-extra`) |
 | 1,000 random positions | ≈0.19 cubes/s (estimated) | 1.20 cubes/s (833 s) | **27.7 cubes/s** (36.0 s) |
 
 **No bulk mode:** neither competitor can search several cubes at once. Each

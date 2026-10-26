@@ -83,14 +83,23 @@ def _table_file(tables: Path, name: str) -> Path:
 
 
 class GpuSolver:
+    # Adaptive extra table: a cube is searched with the 112 table only when it
+    # raises the root bound by at least this much (+3 on the superflip, at most
+    # +1 on 1,000 random and 100 distance-20 positions).
+    ADAPTIVE_RAISE = 2
+
     def __init__(self, tables: Path = Path("tables"), prefix_len: int = 4, grid: int | None = None, block: int = 256,
                  inverse: bool = True, collect_stats: bool = False, mode: str = "step",
                  extra_tables: int = 2, step_extra: int = 0, table_format: str = "block",
-                 step_defines: tuple[str, ...] = ()):
+                 step_defines: tuple[str, ...] = (), adaptive_extra: bool = False):
         """``mode``: "step" (default: step-machine kernel, block table only),
         "forward" (mod-3 table for the axis frames, block table for inverses),
         "multi" (block tables only: 208 plus ``extra_tables`` of 112 and 304),
-        or "bidir" (208 block table, bidirectional search)."""
+        or "bidir" (208 block table, bidirectional search).
+
+        ``adaptive_extra`` (step mode): also load the 112 table (+2.6 GB) and
+        use it only for cubes whose root bound it raises by ``ADAPTIVE_RAISE``
+        or more, such as the superflip; other cubes are searched as without it."""
 
         import cupy as cp
 
@@ -121,9 +130,12 @@ class GpuSolver:
             self.blk = load_device(_table_file(tables, "prune-ud-208-blk.bin"), block_words(n_entries))
         else:
             self.blk = self.table
+        if adaptive_extra and (mode != "step" or step_extra or table_format != "block"):
+            raise ValueError("adaptive_extra needs mode='step', table_format='block' and step_extra=0")
+        self.adaptive = adaptive_extra
         self.extra = []
         if mode in ("multi", "step"):
-            n_extra = extra_tables if mode == "multi" else step_extra
+            n_extra = extra_tables if mode == "multi" else max(step_extra, int(adaptive_extra))
             for name in ("112", "304")[:n_extra]:
                 kind = coords.EdgeKind.parse(name)
                 path = _table_file(tables, f"prune-ud-{name}-blk.bin")
@@ -141,16 +153,26 @@ class GpuSolver:
         if mode == "multi":
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
         elif mode == "step":
-            defines = ("STEP_ALL_BLOCK", f"STEP_EXTRA={len(self.extra)}") + tuple(step_defines)
-            if table_format == "bit":
-                defines += ("TABLE_BIT",)
-            self.k_search = module(*defines).get_function("search_step")
+            def step_kernel(n_extra):
+                defines = ("STEP_ALL_BLOCK", f"STEP_EXTRA={n_extra}") + tuple(step_defines)
+                if table_format == "bit":
+                    defines += ("TABLE_BIT",)
+                return module(*defines).get_function("search_step")
+            self.k_search = step_kernel(0 if adaptive_extra else len(self.extra))
+            if adaptive_extra:
+                self.k_search_extra = step_kernel(1)
         else:
             self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
         self.k_block = mod.get_function("probe_block")
 
     def root_h(self, states: list[CubieState]) -> np.ndarray:
+        h_main, h_all, words = self._root_bounds(states)
+        return h_all, words
+
+    def _root_bounds(self, states: list[CubieState]):
+        """Per-frame root bounds from the main table alone and with the extra tables."""
+
         cp = self.cp
         all_frames = [f for s in states for f in frames(s)]
         packed = [coords.pack(f) for f in all_frames]
@@ -165,20 +187,28 @@ class GpuSolver:
             d_words = cp.asarray(words)
             self.k_block(((n + 127) // 128,), (128,),
                          (self.dt.tables, self.blk, self.dt.classidx, d_words, np.int32(n), out))
+            main = out
             for kind, blk in self.extra:
                 extra = cp.zeros(n, dtype=cp.uint32)
                 module(*kind.defines).get_function("probe_block")(
                     ((n + 127) // 128,), (128,), (self.dt.tables, blk, self.dt.classidx, d_words, np.int32(n), extra))
                 out = cp.maximum(out, extra)
+            shape = (len(states), 6)
+            return main.get().reshape(shape), out.get().reshape(shape), words.reshape(len(states), 30)
         else:
             self.k_root(((n + 127) // 128,), (128,),
                         (self.dt.tables, self.table, self.dt.classidx, cp.asarray(words), np.int32(n), out))
-        return out.get().reshape(len(states), 6), words.reshape(len(states), 30)
+        h = out.get().reshape(len(states), 6)
+        return h, h, words.reshape(len(states), 30)
 
     def solve(self, states: list[CubieState], log=None) -> list[Solution]:
         cp = self.cp
         t0 = time.perf_counter()
-        h, words = self.root_h(states)
+        h_main, h, words = self._root_bounds(states)
+        use_extra = np.zeros(len(states), dtype=bool)
+        if self.adaptive:
+            use_extra = h.max(axis=1) - h_main.max(axis=1) >= self.ADAPTIVE_RAISE
+            h = np.where(use_extra[:, None], h, h_main)
         jobs = np.zeros(len(states), dtype=JOB_DTYPE)
         jobs["frame"] = words
         jobs["h"] = h
@@ -196,10 +226,11 @@ class GpuSolver:
             if not active:
                 break
             host_jobs = d_jobs.get().view(JOB_DTYPE)
-            groups: dict[int, list[int]] = {}
+            groups: dict[tuple[int, bool], list[int]] = {}
             for i in active:
-                groups.setdefault(min(int(host_jobs["bound"][i]), self.prefix_len), []).append(i)
-            for plen, ids in groups.items():
+                key = (min(int(host_jobs["bound"][i]), self.prefix_len), bool(use_extra[i]))
+                groups.setdefault(key, []).append(i)
+            for (plen, extra), ids in groups.items():
                 counter.fill(0)
                 pre = self.prefixes[plen]
                 if self.mode == "multi":
@@ -219,7 +250,8 @@ class GpuSolver:
                         pre, np.int32(len(pre)), np.int32(plen), counter)
                 if self.mode != "multi":
                     args += (self.stats if self.stats is not None else np.uint64(0),)
-                self.k_search((self.grid,), (self.block,), args)
+                kernel = self.k_search_extra if extra else self.k_search
+                kernel((self.grid,), (self.block,), args)
             cp.cuda.Device().synchronize()
             host_jobs = d_jobs.get().view(JOB_DTYPE)
             now = time.perf_counter() - t0

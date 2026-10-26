@@ -43,9 +43,11 @@ All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
   - Hayakawa's 48.7 s uses the GPU plus 11 CPU threads. On the GPU alone it
     takes 53.1 s, a tie with cuda-cube-solver, which uses only the GPU and
     measured 51.5–53.3 s across runs.
-  - With the optional `112` table (`--step-extra 1`, +2.6 GB VRAM),
-    cuda-cube-solver solves it in 10.3 s, but that makes everything else
-    slower.
+  - With `solve --adaptive-extra`, cuda-cube-solver solves it in 10.8 s.
+    This loads an extra table (+2.6 GB VRAM, built once with
+    `build-table --kind 112`) and uses it only for cubes it helps a lot.
+    Random and other 20-move positions run at the same speed as without
+    it.
 
 Full tables, methods, builds and raw outputs are in
 [`docs/benchmarks.md`](docs/benchmarks.md).

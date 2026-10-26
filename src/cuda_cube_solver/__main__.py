@@ -36,8 +36,8 @@ def main(argv: list[str] | None = None) -> None:
                                        "(7.3 GiB, used for solving).")
     build.add_argument("--out", type=Path, default=Path("tables"), help="output directory (default: tables)")
     build.add_argument("--kind", default="208",
-                       help="table variant: 208 (default, needed for solving); 112 and 304 only for the "
-                            "experimental --mode multi / --step-extra")
+                       help="table variant: 208 (default, needed for solving); 112 for solve --adaptive-extra; "
+                            "112 and 304 also for the experimental --mode multi / --step-extra")
     solve = sub.add_parser("solve", help="solve cubes read from stdin (scrambles or facelet strings)",
                            description="Solve cubes optimally.", epilog=SOLVE_EPILOG,
                            formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> None:
     solve.add_argument("--batch", type=int, default=100, help="cubes searched together on the GPU (default: 100)")
     solve.add_argument("--mode", default="step", choices=["step", "forward", "multi", "bidir"],
                        help="search kernel (default: step; the others are slower, kept for experiments)")
+    solve.add_argument("--adaptive-extra", action="store_true",
+                       help="also load prune-ud-112-blk.bin (+2.6 GB VRAM; build-table --kind 112) and use it "
+                            "for cubes it helps a lot, such as the superflip (~5x faster there)")
     args = ap.parse_args(argv)
 
     if args.command == "build-table":
@@ -84,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if cubes:
         try:
-            solver = GpuSolver(args.tables, mode=args.mode)
+            solver = GpuSolver(args.tables, mode=args.mode, adaptive_extra=args.adaptive_extra)
         except TableNotFound as exc:
             sys.exit(f"cuda-cube-solver: {exc}")
         for start in range(0, len(cubes), args.batch):
