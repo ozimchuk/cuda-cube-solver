@@ -12,10 +12,10 @@ All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
 
 | | nxopt (CPU) | vcube (CPU) | copy-optsolver (GPU) | Hayakawa (GPU + CPU) | **cuda-cube-solver** |
 |---|---|---|---|---|---|
-| Random position, median | 0.976 s | 0.763 s | 4.13 s | 0.570 s | **0.023 s** |
-| Random position, worst of 100 | 17.4 s | 7.92 s | 58.5 s | 4.65 s | **0.263 s** |
-| 20-move position, median of 10 | 99.5 s | 74.8 s | ~590 s | 29.4 s | **1.53 s** |
-| Superflip | 720 s | 808 s | 1,148 s | **48.7 s**¹ | 51.5 s |
+| Random position, median | 0.976 s | 0.763 s | 4.13 s | 0.570 s | **0.024 s** |
+| Random position, worst of 100 | 17.4 s | 7.92 s | 58.5 s | 4.65 s | **0.284 s** |
+| 20-move position, median of 10 | 98.8 s | 73.1 s | ~590 s | 29.4 s | **1.57 s** |
+| Superflip | 702 s | 633 s | 1,148 s | **48.7 s**¹ | 53.3 s |
 | 1,000 random positions, whole machine | 6.0 cubes/s | 7.6 cubes/s | ≈0.19 cubes/s² | 1.20 cubes/s | **27.7 cubes/s** |
 | Table | 22.7 GB RAM | 21.2 GiB RAM | 0.9 GB | 3.5 GB | 7.8 GB VRAM |
 
@@ -41,8 +41,8 @@ All solvers below were run on the same desktop, a Ryzen 5 9600X with an RTX
 - ¹ **The superflip** is the one case where another solver is faster than
   the default, and only with help from the CPU:
   - Hayakawa's 48.7 s uses the GPU plus 11 CPU threads. On the GPU alone it
-    takes 53.1 s, slower than cuda-cube-solver's 51.5 s, which uses the GPU
-    only.
+    takes 53.1 s, a tie with cuda-cube-solver, which uses only the GPU and
+    measured 51.5–53.3 s across runs.
   - With the optional `112` table (`--step-extra 1`, +2.6 GB VRAM),
     cuda-cube-solver solves it in 10.3 s, but that makes everything else
     slower.

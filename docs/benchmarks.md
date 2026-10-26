@@ -17,7 +17,7 @@ thread, and cuda-cube-solver searches batches of 100 cubes on the GPU.
 |---|---|---|---|---|
 | nxopt `EO2,EP3` (`nxopt23`), 12 threads | 22.7 GB RAM | 166.3 s | 6.01 | 4.6× |
 | vcube `308`, 12 threads | 21.2 GiB RAM | 131.1 s | 7.63 | 3.6× |
-| **cuda-cube-solver** | 7.8 GB VRAM | **36.2 s** | **27.7** | — |
+| **cuda-cube-solver** | 7.8 GB VRAM | **36.0 s** | **27.7** | — |
 
 Optimal lengths: 3× 15, 27× 16, 278× 17, 659× 18, 33× 19 moves.
 
@@ -42,16 +42,16 @@ solver alike.
 |---|---|---|---|---|
 | nxopt `EO2,EP3`, 1 thread | 0.976 s | 3.09 s | 17.4 s | 1.53 s |
 | vcube `308`, 1 thread | 0.763 s | 2.32 s | 7.92 s | 1.08 s |
-| **cuda-cube-solver** | **0.023 s** | **0.072 s** | **0.263 s** | **0.034 s** |
+| **cuda-cube-solver** | **0.024 s** | **0.069 s** | **0.284 s** | **0.035 s** |
 
 Median time per cube by optimal solution length:
 
 | Optimal length | Cubes | nxopt | vcube | cuda-cube-solver |
 |---|---|---|---|---|
-| 16 | 2 | 0.03 s | 0.02 s | 0.002 s |
-| 17 | 32 | 0.17 s | 0.13 s | 0.009 s |
-| 18 | 65 | 1.35 s | 0.95 s | 0.036 s |
-| 19 | 1 | 10.1 s | 7.92 s | 0.263 s |
+| 16 | 2 | 0.03 s | 0.02 s | 0.0015 s |
+| 17 | 32 | 0.17 s | 0.13 s | 0.0085 s |
+| 18 | 65 | 1.35 s | 0.95 s | 0.038 s |
+| 19 | 1 | 10.1 s | 7.92 s | 0.284 s |
 
 Raw outputs: `data/single_cube/`.
 
@@ -64,12 +64,12 @@ cube at a time.
 
 | 10 positions (`random10.txt`) | Median | Worst | Total |
 |---|---|---|---|
-| nxopt `EO2,EP3`, 1 thread | 99.5 s | 104.6 s | 974 s |
-| vcube `308`, 1 thread | 74.8 s | 124.0 s | 770 s |
-| **cuda-cube-solver** | **1.53 s** | **1.69 s** | **15.3 s** |
+| nxopt `EO2,EP3`, 1 thread | 98.8 s | 102.8 s | 964 s |
+| vcube `308`, 1 thread | 73.1 s | 78.2 s | 716 s |
+| **cuda-cube-solver** | **1.57 s** | **1.76 s** | **15.6 s** |
 
 On the 100 positions in `random100.txt`, cuda-cube-solver takes a median of
-1.54 s and at most 1.97 s per cube. The CPU solvers were not run on those.
+1.56 s and at most 1.99 s per cube. The CPU solvers were not run on those.
 
 The superflip (every edge flipped in place) is much harder than a typical
 20-mover for all three solvers. Their shared table design sees little of
@@ -77,19 +77,33 @@ its distance, so the search starts from a bound of 6 instead of about 12.
 
 | Superflip | Time |
 |---|---|
-| vcube `308`, 1 thread | 808 s |
-| nxopt `EO2,EP3`, 1 thread | 720 s |
-| **cuda-cube-solver** | **51.5 s** |
+| vcube `308`, 1 thread | 633 s |
+| nxopt `EO2,EP3`, 1 thread | 702 s |
+| **cuda-cube-solver** | **53.3 s** |
 | cuda-cube-solver + `112` table (`bench/run_gpu.py --step-extra 1`) | 10.3 s |
 
 The extra `112` table (`cuda-cube-solver build-table --kind 112`, +2.6 GB
 VRAM) makes positions like the superflip about 5× faster, but it makes
 everything else slower:
 
-- 2.00 s instead of 1.53 s median on the 10 positions above;
+- 2.00 s instead of 1.57 s median on the 10 positions above;
 - about 1.5× slower on random scrambles.
 
 It is therefore not the default.
+
+**How the CPU solvers were timed here:** each solver runs all of these
+positions in one process (`warmup_random10_superflip.*`), with one random
+position solved first and its time discarded.
+
+- vcube and nxopt copy their 21–23 GB tables into memory, which only just
+  fits in this machine's 30 GB.
+- While the table loads, Linux moves other programs to swap, and that
+  slowed the first solve after loading. An earlier run without the warm-up
+  overstated vcube's times by up to 28% (superflip 808 s, worst distance-20
+  position 124 s).
+- In the runs shown, solving time matches CPU time to within the table
+  load (vcube 1,351.5 s wall-clock against 1,351.1 s CPU), and nothing of
+  either solver was in swap.
 
 Raw outputs and inputs: `data/distance20/`.
 
@@ -108,13 +122,13 @@ match ours on all 100 positions.
 
 | | copy-optsolver | Hayakawa | **cuda-cube-solver** |
 |---|---|---|---|
-| First 100 random positions, median | 4.13 s | 0.570 s | **0.023 s** |
-| First 100 random positions, mean | 3.99 s | 0.740 s | **0.034 s** |
-| First 100 random positions, worst | 58.5 s | 4.65 s | **0.263 s** |
-| copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.277 s** |
-| 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.53 s** |
-| Superflip | 1,148 s | **48.7 s** | 51.5 s (10.3 s with the `112` table) |
-| 1,000 random positions | ≈0.19 cubes/s (estimated) | 1.20 cubes/s (833 s) | **27.7 cubes/s** (36.2 s) |
+| First 100 random positions, median | 4.13 s | 0.570 s | **0.024 s** |
+| First 100 random positions, mean | 3.99 s | 0.740 s | **0.035 s** |
+| First 100 random positions, worst | 58.5 s | 4.65 s | **0.284 s** |
+| copy-optsolver's hard 19-mover (`19f.txt`) | 39.5 s | 10.0 s | **0.32 s** |
+| 10 distance-20 positions, median | ~590 s (6 of 10 finished in 1 hour) | 29.4 s | **1.57 s** |
+| Superflip | 1,148 s | **48.7 s** | 53.3 s (10.3 s with the `112` table) |
+| 1,000 random positions | ≈0.19 cubes/s (estimated) | 1.20 cubes/s (833 s) | **27.7 cubes/s** (36.0 s) |
 
 **No bulk mode:** neither competitor can search several cubes at once. Each
 solves one cube after another on the whole GPU, so its bulk rate is 1,000
@@ -130,7 +144,7 @@ divided by the sum of its single-cube times.
 
 **Hayakawa's solver** is the closer competitor:
 
-- It is about 25× slower on random positions and 19× slower on distance-20
+- It is about 24× slower on random positions and 19× slower on distance-20
   positions.
 - Its CPU threads handle 7–9% of the search:
   - With one CPU thread, its times are about the same on random and
@@ -138,9 +152,9 @@ divided by the sum of its single-cube times.
   - Using the CPU alone, it is about 10× slower: 199 s for the first 20
     random positions, against 19.4 s with the GPU.
 - The superflip is the only case where it beats cuda-cube-solver's default
-  (48.7 s against 51.5 s), and only with its 11 CPU threads helping. On the
-  GPU alone it takes 53.1 s, against 51.5 s for cuda-cube-solver, which
-  uses the GPU only.
+  (48.7 s against 53.3 s), and only with its 11 CPU threads helping. On the
+  GPU alone it takes 53.1 s, a tie with cuda-cube-solver, which uses only
+  the GPU and measured 51.5–53.3 s across runs.
 
 **copy-optsolver** reports 1.30 s for the 19-mover and 38.2 s for the
 superflip on an RTX 4090. Its search depends on the hot part of its table
@@ -165,6 +179,8 @@ Raw outputs: `data/other_gpu/`.
 - **Single cube versus bulk:** the single-cube gap over the CPU solvers
   (about 30–40×) is larger than the bulk gap (about 4×). For a single cube
   the CPU solvers use only one of the 12 threads.
+- **Background load:** another account on this machine runs `bitcoind`,
+  at about 10% of one core during all measurements.
 - **Single machine only:** on large servers, vcube reports 55 cubes/s
   (32 cores, 170 GB table) and nxopt 33 cubes/s (16 cores, 256 GB).
   cuda-cube-solver has not been run on comparable GPU hardware.

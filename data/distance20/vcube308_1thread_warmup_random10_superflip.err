@@ -1,0 +1,2 @@
+Total time: 1351.545825535 real, 1351.142833 cpu, 1351.142833 cpu/worker
+vcube /usr/bin/time: wall 1374.87 s, user 1350.27 s, sys 11.01 s, major faults 4
