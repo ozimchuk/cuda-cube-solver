@@ -14,17 +14,30 @@ typedef unsigned long long u64;
 // only, 2 = plus the order of the E edges (4!), 3 = plus which non-E
 // positions hold U-layer edges (8C4); EO 4 = flips of the E edges, 8 = flips
 // of the non-E edges, 12 = all flips.  The default variant is "208".
+// Survey variants: EP 5, 6, 7 = E order up to A4, D4, Klein four relabelling
+// (2, 3, 6 classes); EP 8 = EP 3 up to swapping U and D edges (35 classes).
 #ifndef EDGE_EP
 #define EDGE_EP 2
 #endif
 #ifndef EDGE_EO
 #define EDGE_EO 8
 #endif
-__host__ __device__ constexpr u32 n_ep(int ep) { return ep == 1 ? 1u : (ep == 2 ? 24u : 70u); }
+__host__ __device__ constexpr u32 n_ep(int ep) {
+    return ep == 1 ? 1u : ep == 2 ? 24u : ep == 3 ? 70u : ep == 5 ? 2u : ep == 6 ? 3u : ep == 7 ? 6u : 35u;
+}
 __host__ __device__ constexpr u32 n_eo(int eo) { return eo == 4 ? 16u : (eo == 8 ? 256u : 2048u); }
+// Generic survey variant, EP 9: the E edges' labels and flips up to a group L
+// (T.gen_class / T.gen_rep, GEN_NEC classes); EO then picks the non-E part:
+// 1 = their flips (256), 2 = which non-E positions hold U edges (70), 3 = that
+// up to swapping U and D (35).
+#ifndef GEN_NEC
+#define GEN_NEC 1
+#endif
+__host__ __device__ constexpr u32 n_gen_ne(int mode) { return mode == 1 ? 256u : (mode == 2 ? 70u : 35u); }
 template <int EP, int EO>
 struct EdgeKind {
-    static constexpr unsigned long long N = 495ull * n_ep(EP) * n_eo(EO);
+    static constexpr unsigned long long N =
+        EP == 9 ? 495ull * n_gen_ne(EO) * GEN_NEC : 495ull * n_ep(EP) * n_eo(EO);
 };
 #define N_EDGE (EdgeKind<EDGE_EP, EDGE_EO>::N)
 
@@ -55,6 +68,12 @@ struct Tables {
     unsigned short slice_rank[4096];
     unsigned char pext6[64][64];   // pext6[mask][value]: bits of value selected by mask, compacted
     unsigned char compact4[16][256];  // 2-bit fields of a byte selected by a 4-bit mask, compacted
+    unsigned char eorder_class[3][24];  // survey EP 5..7: E-order rank -> class
+    unsigned char eorder_crep[3][8];    // class -> E-order rank of its representative
+    unsigned char split_class[70];      // survey EP 8: U-edge layout rank -> class
+    unsigned char split_rep[36];
+    unsigned short gen_class[384];      // EP 9: E content (order rank * 16 + flips) -> class
+    unsigned short gen_rep[2][384];     // EP 9: class -> content, by required flip parity
 };
 
 struct State {
@@ -159,16 +178,34 @@ __device__ __forceinline__ u32 edge_coord_k(const Tables& T, const State& s, int
     u32 omask = gather_bit(e[0], 4) | (gather_bit(e[1], 4) << 4) | (gather_bit(e[2], 4) << 8);
     u32 nm = ~emask & 0xFFFu;
     u32 ep = 0;
-    if (EP == 2) {
+    if (EP == 9) {
+        u32 n0 = __popc(m0), n1 = __popc(m1);
+        u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
+                   ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
+        u32 c = T.gen_class[T.eorder_rank[eord] * 16u + pext12(T, omask, emask)];
+        u32 ne;
+        if (EO == 1) {
+            ne = pext12(T, omask, nm);
+        } else {
+            u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
+                        (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
+            ne = T.ccomb_rank[pext12(T, umask, nm)];
+            if (EO == 3) ne = T.split_class[ne];
+        }
+        return ((u32)T.slice_rank[emask] * n_gen_ne(EO) + ne) * GEN_NEC + c;
+    }
+    if (EP == 2 || (EP >= 5 && EP <= 7)) {
         u32 n0 = __popc(m0), n1 = __popc(m1);
         u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
                    ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
         ep = T.eorder_rank[eord];
-    } else if (EP == 3) {
+        if (EP != 2) ep = T.eorder_class[EP - 5][ep];
+    } else if (EP == 3 || EP == 8) {
         // U-layer edges are cubies 0..3: bits 2 and 3 of the byte clear.
         u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
                     (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
         ep = T.ccomb_rank[pext12(T, umask, nm)];
+        if (EP == 8) ep = T.split_class[ep];
     }
     u32 eo;
     if (EO == 4) eo = pext12(T, omask, emask);
@@ -183,6 +220,15 @@ __device__ __forceinline__ u32 edge_coord(const Tables& T, const State& s, int s
 
 // Table index for variant kind 0 = "208", 1 = "112", 2 = "304" chosen at run
 // time: the conjugation and masks are shared, only the extraction differs.
+// Kind 3 = a second generic kind (EP 9, non-E flips) for an extra table:
+// EXTRA_GEN_NEC classes, numbered by EXTRA_GEN_CLASS (set by the host; a global
+// array, not part of Tables, so the shared-memory copy does not grow).
+#ifdef EXTRA_GEN_NEC
+__device__ unsigned short EXTRA_GEN_CLASS[384];
+#endif
+#ifndef EXTRA1_KIND
+#define EXTRA1_KIND 1  // index variant of the first extra table (3 with EXTRA_GEN_NEC)
+#endif
 #define N_EDGE_208 (EdgeKind<2, 8>::N)
 #define N_EDGE_112 (EdgeKind<1, 12>::N)
 #define N_EDGE_304 (EdgeKind<3, 4>::N)
@@ -211,6 +257,15 @@ __device__ __forceinline__ u64 table_index_any(const Tables& T, const u32* __res
         return cls * N_EDGE_208 + (slice * 24u + T.eorder_rank[eord]) * 256u + pext12(T, omask, nm);
     }
     if (kind == 1) return cls * N_EDGE_112 + slice * 2048u + (omask & 0x7FFu);
+#ifdef EXTRA_GEN_NEC
+    if (kind == 3) {
+        u32 n0 = __popc(m0), n1 = __popc(m1);
+        u32 eord = T.compact4[m0][labels8(e[0])] | ((u32)T.compact4[m1][labels8(e[1])] << (2 * n0)) |
+                   ((u32)T.compact4[m2][labels8(e[2])] << (2 * (n0 + n1)));
+        u32 c = EXTRA_GEN_CLASS[T.eorder_rank[eord] * 16u + pext12(T, omask, emask)];
+        return cls * (495ull * 256u * EXTRA_GEN_NEC) + ((u64)slice * 256u + pext12(T, omask, nm)) * EXTRA_GEN_NEC + c;
+    }
+#endif
     u32 umask = gather_bit(~(e[0] | (e[0] >> 1)), 2) | (gather_bit(~(e[1] | (e[1] >> 1)), 2) << 4) |
                 (gather_bit(~(e[2] | (e[2] >> 1)), 2) << 8);
     return cls * N_EDGE_304 + (slice * 70u + T.ccomb_rank[pext12(T, umask, nm)]) * 16u + pext12(T, omask, emask);
@@ -259,12 +314,48 @@ __device__ void unrank(const Tables& T, const u32* __restrict__ class_rep, u64 i
     }
     s.c0 = c[0] | (c[1] << 8) | (c[2] << 16) | (c[3] << 24);
     s.c1 = c[4] | (c[5] << 8) | (c[6] << 16) | (c[7] << 24);
+#if EDGE_EP == 9
+    (void)NEP;
+    (void)NEO;
+    const u32 NNE = n_gen_ne(EDGE_EO);
+    u32 gc = ecoord % GEN_NEC;
+    u32 grest = ecoord / GEN_NEC;
+    u32 gne = grest % NNE;
+    u32 emask = T.slice_unrank[grest / NNE];
+    u32 nflips = EDGE_EO == 1 ? gne : 0u;
+    u32 content = T.gen_rep[__popc(nflips) & 1u][gc];
+    u32 eord = T.eorder_unrank[content >> 4], eflips = content & 15u;
+    u32 umask = 0x0Fu;
+    if (EDGE_EO == 2) umask = T.ccomb_unrank[gne];
+    if (EDGE_EO == 3) umask = T.ccomb_unrank[T.split_rep[gne]];
+    // Non-E flips untracked: the first non-E edge carries the flip parity.
+    if (EDGE_EO != 1) nflips = __popc(eflips) & 1u;
+    u32 e[3] = {0, 0, 0};
+    u32 ne = 0, no = 0, nu_e = 0, nd_e = 0;
+    for (int i = 0; i < 12; ++i) {
+        u32 b, flip;
+        if ((emask >> i) & 1u) {
+            b = 8u | ((eord >> (2 * ne)) & 3u);
+            flip = (eflips >> ne) & 1u;
+            ++ne;
+        } else {
+            b = (umask >> no) & 1u ? nu_e++ : 4u + nd_e++;
+            flip = (nflips >> no) & 1u;
+            ++no;
+        }
+        e[i >> 2] |= (b | (flip << 4)) << ((i & 3) * 8);
+    }
+#else
     u32 eo = ecoord % NEO;
     u32 rest = ecoord / NEO;
     u32 ep = rest % NEP;
     u32 emask = T.slice_unrank[rest / NEP];
-    u32 eord = EDGE_EP == 2 ? T.eorder_unrank[ep] : 0xE4u;  // identity order 0,1,2,3
-    u32 umask = EDGE_EP == 3 ? T.ccomb_unrank[ep] : 0x0Fu;  // non-E slots holding U edges
+    u32 eord = 0xE4u;  // identity order 0,1,2,3
+    if (EDGE_EP == 2) eord = T.eorder_unrank[ep];
+    if (EDGE_EP >= 5 && EDGE_EP <= 7) eord = T.eorder_unrank[T.eorder_crep[EDGE_EP - 5][ep]];
+    u32 umask = 0x0Fu;  // non-E slots holding U edges
+    if (EDGE_EP == 3) umask = T.ccomb_unrank[ep];
+    if (EDGE_EP == 8) umask = T.ccomb_unrank[T.split_rep[ep]];
     u32 e[3] = {0, 0, 0};
     u32 ne = 0, no = 0, nu_e = 0, nd_e = 0;
     for (int i = 0; i < 12; ++i) {
@@ -281,6 +372,7 @@ __device__ void unrank(const Tables& T, const u32* __restrict__ class_rep, u64 i
         if (EDGE_EO == 12) flip = i < 11 ? (eo >> i) & 1u : (u32)(__popc(eo) & 1);
         e[i >> 2] |= (b | (flip << 4)) << ((i & 3) * 8);
     }
+#endif
     s.e0 = e[0];
     s.e1 = e[1];
     s.e2 = e[2];
@@ -307,9 +399,27 @@ __device__ __forceinline__ u32 table_claim(u32* table, u64 idx, u32 value) {
 // one sector.
 #define BLOCK_ENTRIES 124ull
 
+// Base-3 block table (TABLE_B3, search only): each 32-byte sector holds a
+// header byte (6-bit minimum m, 2-bit cut offset c) and 155 entries, five per
+// byte in base 3: digit 0 = at least m, 1 = exactly m + c + 1, 2 = at least
+// m + c + 2.  Still a coset lower bound, so the axis rule stays valid.
+#define B3_ENTRIES 155ull
+
 __device__ __forceinline__ u32 block_lb(const u32* __restrict__ blk, u64 idx) {
 #ifdef PROBE_L2_ONLY
     idx &= 0x3FFFFFull;
+#endif
+#ifdef TABLE_B3
+    {
+        u64 b = idx / B3_ENTRIES;
+        u32 j = (u32)(idx - b * B3_ENTRIES);
+        const unsigned char* p = reinterpret_cast<const unsigned char*>(blk) + b * 32u;
+        u32 hdr = p[0], byte = p[1u + j / 5u];
+        u32 k = j % 5u;
+        u32 d = (byte / (k == 0 ? 1u : k == 1 ? 3u : k == 2 ? 9u : k == 3 ? 27u : 81u)) % 3u;
+        u32 m = hdr & 63u;
+        return d == 0u ? m : m + (hdr >> 6) + d;
+    }
 #endif
     u64 b = idx / BLOCK_ENTRIES;
     u32 pos = 8u + 2u * (u32)(idx - b * BLOCK_ENTRIES);
@@ -373,6 +483,9 @@ __device__ __forceinline__ bool bit_test(const Tables& T, const u32* __restrict_
 // Record an entry first reached at depth.  BFS claims in increasing depth,
 // so the first claim in a block fixes its minimum.
 __device__ void block_set(u32* blk, u64 idx, u32 depth) {
+#ifdef NO_BLOCK_TABLE
+    return;  // mod-3 table only (tables too large for both on the card)
+#endif
     u64 b = idx / BLOCK_ENTRIES;
     u32 pos = 8u + 2u * (u32)(idx - b * BLOCK_ENTRIES);
     u32* p = blk + b * 8u;
@@ -1300,7 +1413,11 @@ __device__ __forceinline__ u32 frame_order(const u32* h, u32 edge) {
 #ifndef STEP_EXTRA
 #define STEP_EXTRA 0
 #endif
-#define EXTRA_STEP_MASKS (STEP_EXTRA >= 1 ? (0x3Fu << 18) : 0u) | (STEP_EXTRA >= 2 ? (0x3Fu << 24) : 0u)
+// EXTRA_FRAMES: which frames (bit j = frame j) also look up the extra tables.
+#ifndef EXTRA_FRAMES
+#define EXTRA_FRAMES 0x3Fu
+#endif
+#define EXTRA_STEP_MASKS (STEP_EXTRA >= 1 ? ((EXTRA_FRAMES) << 18) : 0u) | (STEP_EXTRA >= 2 ? ((EXTRA_FRAMES) << 24) : 0u)
 
 __device__ __forceinline__ int next_frame(u32& rem) {
     if (!rem) return 6;
@@ -1365,6 +1482,9 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
     int g = 0, base = 0, last = -1;
     u32 todo = 0;
     unsigned long long nodes = 0;
+#ifdef LOOKUP_STATS
+    unsigned long long n_look[8] = {}, n_prune[8] = {};  // per frame: lookups, prunes
+#endif
     bool have_item = false, done = false;
     int m = -1;       // child under evaluation
     int k = 0;        // 6 = survived all frames, 7 = pruned, otherwise evaluating
@@ -1465,7 +1585,7 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
 #else
                             u32 v = block_lb(blk, table_index(T, classidx, f[j]));
 #endif
-                            if (STEP_EXTRA >= 1) v = max(v, block_lb(x112, table_index_any(T, classidx, f[j], 1)));
+                            if (STEP_EXTRA >= 1) v = max(v, block_lb(x112, table_index_any(T, classidx, f[j], EXTRA1_KIND)));
                             if (STEP_EXTRA >= 2) v = max(v, block_lb(x304, table_index_any(T, classidx, f[j], 2)));
                             h[j] = (j < 3 && h[j]) ? max(v, h[j] - 1u) : v;
                         }
@@ -1567,6 +1687,9 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         lane_sample(lane_acc, 0);
 #endif
         const int fr = k & 7, tbl = k >> 3;
+#ifdef LOOKUP_STATS
+        ++n_look[fr];
+#endif
         u32 parent = pick_u32(h, fr);
         u32 v = parent;
 #ifdef TABLE_BIT
@@ -1621,8 +1744,10 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
             } else
 #endif
             {
+                // The main table is the compiled kind (table_index); extra tables by variant.
                 const u32* tb = tbl == 0 ? blk : (tbl == 1 ? x112 : x304);
-                v = block_lb(tb, table_index_any(T, classidx, t, tbl));
+                v = block_lb(tb, tbl == 0 ? table_index(T, classidx, t)
+                                          : table_index_any(T, classidx, t, tbl == 1 ? EXTRA1_KIND : tbl));
             }
             if (tbl == 0) {
                 if (fr < 3 && parent) v = max(v, parent - 1u);
@@ -1645,6 +1770,9 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
             if (j == fr) c[j] = v;
         }
         k = (g + 1 + v > bound) ? 7 : next_frame(rem);
+#ifdef LOOKUP_STATS
+        if (k == 7) ++n_prune[fr];
+#endif
 #ifdef PHASE_STATS
         t4 = clock64();
         if (timer) {
@@ -1653,6 +1781,13 @@ search_step(const Tables* __restrict__ gT, const SearchConst* __restrict__ gS,
         }
 #endif
     }
+#ifdef LOOKUP_STATS
+    if (stats)
+        for (int i = 0; i < 8; ++i) {
+            atomicAdd(&stats[i], n_look[i]);
+            atomicAdd(&stats[8 + i], n_prune[i]);
+        }
+#endif
 #ifdef LANE_STATS
     if (stats)
         for (int i = 0; i < 16; ++i) atomicAdd(&stats[32 + i], lane_acc[i]);
@@ -1685,6 +1820,53 @@ extern "C" __global__ void exact_at(const u32* __restrict__ table, const u32* __
     out[i] = (unsigned char)v;
 }
 
+
+// Exact value of entry x from the mod-3 table and the 2-bit block table.
+__device__ __forceinline__ u32 exact_value(const u32* __restrict__ table, const u32* __restrict__ blk, u64 x) {
+    u64 b = x / BLOCK_ENTRIES;
+    u32 pos = 8u + 2u * (u32)(x - b * BLOCK_ENTRIES);
+    const u32* p = blk + b * 8u;
+    u32 v = (p[0] & 0xFFu) + ((p[pos >> 5] >> (pos & 31u)) & 3u);
+    if (v - (p[0] & 0xFFu) == 3u) {
+        u32 m3 = table_get(table, x);
+        while (v % 3u != m3) ++v;
+    }
+    return v;
+}
+
+// Base-3 blocks [b0, b0 + nb) from exact values; the cut maximises the sum
+// of the encoded bounds in the block.  out: 8 words per block.
+extern "C" __global__ void build_b3(const u32* __restrict__ table, const u32* __restrict__ blk,
+                                    u64 b0, u64 nb, u64 n_entries, u32* __restrict__ out) {
+    u64 i = blockIdx.x * (u64)blockDim.x + threadIdx.x;
+    if (i >= nb) return;
+    u64 first = (b0 + i) * B3_ENTRIES;
+    unsigned char v[155];
+    u32 n = (u32)min((u64)B3_ENTRIES, n_entries - first), m = 255;
+    for (u32 j = 0; j < n; ++j) {
+        v[j] = (unsigned char)exact_value(table, blk, first + j);
+        m = min(m, (u32)v[j]);
+    }
+    u32 best = 0, best_score = 0;
+    for (u32 c = 0; c < 4; ++c) {
+        u32 score = 0;
+        for (u32 j = 0; j < n; ++j) score += v[j] <= m + c ? m : (v[j] == m + c + 1 ? m + c + 1 : m + c + 2);
+        if (score > best_score) best_score = score, best = c;
+    }
+    unsigned char bytes[32];
+    bytes[0] = (unsigned char)(m | (best << 6));
+    for (u32 q = 0; q < 31; ++q) {
+        u32 x = 0;
+        for (int k = 4; k >= 0; --k) {
+            u32 j = q * 5u + (u32)k, d = 0;
+            if (j < n) d = v[j] <= m + best ? 0u : (v[j] == m + best + 1 ? 1u : 2u);
+            x = x * 3u + d;
+        }
+        bytes[1 + q] = (unsigned char)x;
+    }
+    for (int w = 0; w < 8; ++w)
+        out[i * 8 + w] = bytes[4 * w] | (bytes[4 * w + 1] << 8) | (bytes[4 * w + 2] << 16) | ((u32)bytes[4 * w + 3] << 24);
+}
 
 // Build the threshold-bit table for words [w0, w0 + n_words) from the exact
 // 208 values (block table, "at least min + 3" resolved by the mod-3 table).

@@ -19,7 +19,8 @@ def _selector(sources: list[int]) -> int:
     return sum((src & 7) << (4 * i) for i, src in enumerate(sources))
 
 
-def build_tables() -> bytes:
+def build_tables(gen=None) -> bytes:
+    """``gen``: (gen_class[384], gen_rep[2, 384]) for the generic survey variant (EP 9)."""
     c_sel = np.zeros((18, 2), np.uint32)
     c_add = np.zeros((18, 2), np.uint32)
     e_sel01 = np.zeros((18, 3), np.uint32)
@@ -95,6 +96,12 @@ def build_tables() -> bytes:
         coords.SLICE_RANK.astype(np.uint16),
         pext6,
         compact4,
+        np.stack([coords.EORDER_CLASS[k] for k in (5, 6, 7)]),
+        np.stack([np.pad(coords.EORDER_CLASS_REP[k], (0, 8 - len(coords.EORDER_CLASS_REP[k]))) for k in (5, 6, 7)]),
+        coords.SPLIT_CLASS,
+        np.pad(coords.SPLIT_REP, (0, 1)),
+        np.zeros(384, np.uint16) if gen is None else np.asarray(gen[0], np.uint16),
+        np.zeros((2, 384), np.uint16) if gen is None else np.asarray(gen[1], np.uint16),
     ]
     blob = bytearray()
     for part in parts:
@@ -118,10 +125,10 @@ def module(*defines: str):
 class DeviceTables:
     """Constant tables resident on the GPU."""
 
-    def __init__(self):
+    def __init__(self, gen=None):
         import cupy as cp
 
-        blob = build_tables()
+        blob = build_tables(gen)
         size = cp.zeros(1, dtype=cp.uint32)
         module().get_function("tables_size")((1,), (1,), (size,))
         if int(size[0]) != len(blob):

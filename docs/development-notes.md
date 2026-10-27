@@ -18,8 +18,10 @@ are in [`future-work.md`](future-work.md).
 | Per-node move masks (lookup-lane efficiency 22% → 45%) | 23.7 |
 | Step-machine kernel, per-node frame order, block table only (lane efficiency 99%, half the VRAM) | 28.0 |
 
-Later re-measurements of the final kernel give 27.6–27.8 cubes/s; the
-README and `docs/benchmarks.md` use the most recent run (27.7).
+Later re-measurements of the final kernel give 27.6–27.8 cubes/s with the
+`208` table. The default table is now `d4t` (same size, 37.1–38.2 cubes/s;
+see `research/subgroups/README.md`), which the README and
+`docs/benchmarks.md` use.
 
 ## Expected table contents
 

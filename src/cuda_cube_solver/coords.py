@@ -41,6 +41,11 @@ class EdgeKind:
     ``ep``: 1 = E-slice positions only, 2 = plus the order of the E edges,
     3 = plus which non-E positions hold U-layer edges.  ``eo``: 4 = flips of
     the E edges, 8 = flips of the non-E edges, 12 = all flips.
+
+    Survey variants (subgroup-survey branch): ``ep`` 5, 6, 7 keep the order of
+    the E edges only up to relabelling by A4, by the D4 that the 16 symmetries
+    induce, or by the Klein four-group (2, 3 or 6 classes); 8 keeps which
+    non-E positions hold U-layer edges up to swapping U and D (35 classes).
     """
 
     ep: int
@@ -48,7 +53,7 @@ class EdgeKind:
 
     @property
     def n_ep(self) -> int:
-        return {1: 1, 2: 24, 3: 70}[self.ep]
+        return {1: 1, 2: 24, 3: 70, 5: 2, 6: 3, 7: 6, 8: 35}[self.ep]
 
     @property
     def n_eo(self) -> int:
@@ -133,7 +138,12 @@ def edge_coord(edges: np.ndarray, kind: EdgeKind = K208) -> np.ndarray:
                 umask |= int((b & 15) < 4) << ocount
                 eo_n |= (b >> 4) << ocount
                 ocount += 1
-        ep = {1: 0, 2: int(EORDER_RANK[eorder]), 3: int(CCOMB_RANK[umask])}[kind.ep]
+        if kind.ep in EORDER_CLASS:
+            ep = int(EORDER_CLASS[kind.ep][EORDER_RANK[eorder]])
+        elif kind.ep == 8:
+            ep = int(SPLIT_CLASS[CCOMB_RANK[umask]])
+        else:
+            ep = {1: 0, 2: int(EORDER_RANK[eorder]), 3: int(CCOMB_RANK[umask])}[kind.ep]
         if kind.eo == 4:
             eo = eo_e
         elif kind.eo == 8:
@@ -164,8 +174,16 @@ def edges_from_coord(coord: int, kind: EdgeKind = K208) -> np.ndarray:
     rest, eo = divmod(int(coord), kind.n_eo)
     srank, ep = divmod(rest, kind.n_ep)
     emask = int(SLICE_UNRANK[srank])
-    eorder = int(EORDER_UNRANK[ep]) if kind.ep == 2 else 0xE4
-    umask = int(CCOMB_UNRANK[ep]) if kind.ep == 3 else 0x0F
+    eorder = 0xE4
+    if kind.ep == 2:
+        eorder = int(EORDER_UNRANK[ep])
+    elif kind.ep in EORDER_CLASS:
+        eorder = int(EORDER_UNRANK[EORDER_CLASS_REP[kind.ep][ep]])
+    umask = 0x0F
+    if kind.ep == 3:
+        umask = int(CCOMB_UNRANK[ep])
+    elif kind.ep == 8:
+        umask = int(CCOMB_UNRANK[SPLIT_REP[ep]])
     edges = np.zeros(12, dtype=np.uint8)
     ecount = ocount = n_u = n_d = 0
     for i in range(12):
@@ -257,6 +275,48 @@ def ud_actions() -> tuple[tuple[CornerSym, ...], tuple[EdgeSym, ...]]:
     return tuple(_corner_sym(s) for s in syms), tuple(_edge_sym(s) for s in syms)
 
 
+def _eorder_classes():
+    """E-order classes for the survey kinds 5 (A4), 6 (D4), 7 (Klein four).
+
+    The coordinate lists the labels of the E edges in position order; a
+    relabelling k maps it to k o order.  Each group must be normalised by
+    the relabelling of the 16 UD symmetries, so symmetry reduction stays valid.
+    """
+
+    perms = list(permutations(range(4)))
+    rank = {p: i for i, p in enumerate(perms)}
+
+    def parity(p):
+        return sum(p[i] > p[j] for i in range(4) for j in range(i + 1, 4)) & 1
+
+    _, edge_syms = ud_actions()
+    d4 = {tuple(int(es.perm[8 + i]) - 8 for i in range(4)) for es in edge_syms}
+    groups = {
+        5: [p for p in perms if not parity(p)],
+        6: sorted(d4),
+        7: [(0, 1, 2, 3), (1, 0, 3, 2), (2, 3, 0, 1), (3, 2, 1, 0)],
+    }
+    classes, reps = {}, {}
+    for kind, group in groups.items():
+        for g in d4:  # normalised by the symmetry relabelling
+            ginv = tuple(sorted(range(4), key=lambda i: g[i]))
+            assert {tuple(g[k[ginv[i]]] for i in range(4)) for k in group} == set(group)
+        orbit_min = [min(rank[tuple(k[v] for v in p)] for k in group) for p in perms]
+        mins = sorted(set(orbit_min))
+        classes[kind] = np.array([mins.index(m) for m in orbit_min], dtype=np.uint8)
+        reps[kind] = np.array(mins, dtype=np.uint8)
+    assert len(d4) == 8
+    return classes, reps
+
+
+def _split_classes():
+    """U-edge layouts (8C4 ranks) up to swapping the U and D edges."""
+
+    orbit_min = [min(r, int(CCOMB_RANK[0xFF ^ int(CCOMB_UNRANK[r])])) for r in range(N_CCOMB)]
+    mins = sorted(set(orbit_min))
+    return np.array([mins.index(m) for m in orbit_min], dtype=np.uint8), np.array(mins, dtype=np.uint8)
+
+
 @dataclass(frozen=True)
 class CornerClasses:
     classidx: np.ndarray   # raw -> class << 4 | sym, with conj(sym, raw) = rep(class)
@@ -278,6 +338,10 @@ def corner_classes() -> CornerClasses:
     classidx = (class_of_rep[orbit_min] << 4 | sym).astype(np.uint32)
     stab = ((images[:, reps] == reps[None, :]).astype(np.uint32) << np.arange(16)[:, None]).sum(axis=0)
     return CornerClasses(classidx, reps.astype(np.uint32), stab.astype(np.uint16))
+
+
+EORDER_CLASS, EORDER_CLASS_REP = _eorder_classes()
+SPLIT_CLASS, SPLIT_REP = _split_classes()
 
 
 def table_index(corners: np.ndarray, edges: np.ndarray, kind: EdgeKind = K208) -> int:

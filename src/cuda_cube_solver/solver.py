@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -9,10 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
-from cuda_cube_solver import coords
+from cuda_cube_solver import coords, kinds
 from cuda_cube_solver.device import DeviceTables, module, pack_states
 from cuda_cube_solver.geometry import axis_rotation, move_map
-from cuda_cube_solver.table import block_words, load_device
+from cuda_cube_solver.table import b3_words, block_words, load_device
 from cuda_cube_solver.cubie import MOVE_NAMES_HTM, MOVES_HTM, CubieState, apply_moves
 
 JOB_DTYPE = np.dtype(
@@ -38,10 +39,13 @@ def allowed(last: int, move: int) -> bool:
 
 @lru_cache(maxsize=None)
 def canonical_prefixes(length: int) -> np.ndarray:
-    seqs = [()]
+    allow = np.array([[allowed(last, m) for m in range(18)] for last in range(-1, 18)], dtype=bool)
+    seqs, last = np.zeros((1, 0), dtype=np.uint8), np.zeros(1, dtype=np.int64)
     for _ in range(length):
-        seqs = [s + (m,) for s in seqs for m in range(18) if allowed(s[-1] if s else -1, m)]
-    return np.array(seqs, dtype=np.uint8).reshape(len(seqs), length)
+        i, m = np.nonzero(allow[last])  # row-major: each sequence's children in move order
+        seqs = np.concatenate([seqs[i], m[:, None].astype(np.uint8)], axis=1)
+        last = m + 1
+    return seqs
 
 
 def search_const() -> bytes:
@@ -78,19 +82,53 @@ class TableNotFound(FileNotFoundError):
 def _table_file(tables: Path, name: str) -> Path:
     path = tables / name
     if not path.exists():
-        raise TableNotFound(f"{path} not found; build the tables with `cuda-cube-solver build-table --out {tables}`")
+        m = re.fullmatch(r"prune-ud-(\d+|[a-z0-9]+)(?:-blk)?(-b3)?\.bin", name)
+        hint = f"; build it with `cuda-cube-solver build-table --table {m[1]}{m[2] or ''} --out {tables}`" if m else ""
+        raise TableNotFound(f"{path} not found{hint}")
     return path
+
+
+class NoTableFits(RuntimeError):
+    """No table preset fits in the GPU memory budget."""
+
+
+def open_solver(tables: Path = Path("tables"), memory="auto", table: str | None = None, build: bool = True,
+                log=print) -> "GpuSolver":
+    """A solver with the fastest table preset that fits ``memory`` (GB, or "auto": the free VRAM),
+    or the preset named ``table`` (see ``kinds.PRESETS``).  A missing table is built first
+    (1-3 min) unless ``build`` is False."""
+
+    from cuda_cube_solver import table as tables_mod
+
+    tables = Path(tables)
+    if tables.suffix == ".bin":  # a table file inside the directory, as GpuSolver accepts
+        tables = tables.parent
+    preset = kinds.pick(tables, memory, table)[0]
+    if preset is None:
+        raise NoTableFits("no table fits in that GPU memory (the smallest, 304, needs 1.8 GB)")
+    if not (tables / preset.file).exists():
+        if not build:
+            raise TableNotFound(f"{tables / preset.file} not found")
+        log(f"building table {preset.name} ({preset.table_bytes / 1e9:.2f} GB, needs "
+            f"{preset.build_bytes / 1e9:.1f} GB VRAM, 1-3 min) in {tables}/")
+        log(f"wrote {tables_mod.build_preset(tables, preset, log=lambda m: log(f'  {m}'))}")
+    return GpuSolver(tables, kind=preset.kind, table_format=preset.format)
 
 
 class GpuSolver:
     def __init__(self, tables: Path = Path("tables"), prefix_len: int = 4, grid: int | None = None, block: int = 256,
                  inverse: bool = True, collect_stats: bool = False, mode: str = "step",
                  extra_tables: int = 2, step_extra: int = 0, table_format: str = "block",
-                 step_defines: tuple[str, ...] = ()):
+                 step_defines: tuple[str, ...] = (), kind="208",
+                 deeper_prefix_at: tuple[float, ...] = (5e7, 3e9), extra_kind=None):
         """``mode``: "step" (default: step-machine kernel, block table only),
         "forward" (mod-3 table for the axis frames, block table for inverses),
         "multi" (block tables only: 208 plus ``extra_tables`` of 112 and 304),
-        or "bidir" (208 block table, bidirectional search)."""
+        or "bidir" (208 block table, bidirectional search).  ``kind`` picks another
+        main table variant (step mode, no extra tables): a ``kinds.get`` name such as "d4t", or an
+        object with ``name``, ``n_edge``, ``defines`` and optionally ``gen`` (research/subgroups).
+        ``extra_kind``: a second table of a generic kind (e.g. "s4", same format as the main
+        one), looked up only when the main table's frames do not prune (step mode)."""
 
         import cupy as cp
 
@@ -100,8 +138,14 @@ class GpuSolver:
             tables = tables.parent
         self.cp = cp
         self.mode = mode
-        self.dt = DeviceTables()
-        n_entries = self.dt.n_classes * coords.N_EDGE
+        self.kind = kinds.get(kind) if isinstance(kind, str) else kind
+        kind = self.kind.name
+        self.dt = DeviceTables(getattr(self.kind, "gen", None))
+        if (kind != "208" or table_format == "b3") and (mode != "step" or table_format == "bit" or step_extra):
+            raise ValueError("another table kind or b3 needs mode='step' and no extra tables")
+        if extra_kind is not None and (mode != "step" or table_format == "bit" or step_extra):
+            raise ValueError("extra_kind needs mode='step' and no step_extra")
+        n_entries = self.dt.n_classes * self.kind.n_edge
         n_words = (n_entries + 15) // 16
         self.inverse = inverse or mode in ("bidir", "multi", "step")
         if mode in ("bidir", "multi", "step"):
@@ -117,20 +161,38 @@ class GpuSolver:
             k304 = coords.EdgeKind(3, 4)
             self.fallback = load_device(_table_file(tables, "prune-ud-304-blk.bin"),
                                         block_words(self.dt.n_classes * k304.n_edge))
+        elif table_format == "b3":
+            self.blk = load_device(_table_file(tables, f"prune-ud-{kind}-b3.bin"), b3_words(n_entries))
         elif self.inverse:
-            self.blk = load_device(_table_file(tables, "prune-ud-208-blk.bin"), block_words(n_entries))
+            self.blk = load_device(_table_file(tables, f"prune-ud-{kind}-blk.bin"), block_words(n_entries))
         else:
             self.blk = self.table
         self.extra = []
         if mode in ("multi", "step"):
             n_extra = extra_tables if mode == "multi" else step_extra
             for name in ("112", "304")[:n_extra]:
-                kind = coords.EdgeKind.parse(name)
+                ek = coords.EdgeKind.parse(name)
                 path = _table_file(tables, f"prune-ud-{name}-blk.bin")
-                self.extra.append((kind, load_device(path, block_words(self.dt.n_classes * kind.n_edge))))
+                self.extra.append((ek, load_device(path, block_words(self.dt.n_classes * ek.n_edge))))
+        if extra_kind is not None:
+            ek = kinds.get(extra_kind) if isinstance(extra_kind, str) else extra_kind
+            if getattr(ek, "gen", None) is None or "EDGE_EO=1" not in ek.defines:
+                raise ValueError("extra_kind must be a generic kind with non-E flips (kinds.GroupKind)")
+            n_extra = self.dt.n_classes * ek.n_edge
+            if table_format == "b3":
+                arr = load_device(_table_file(tables, f"prune-ud-{ek.name}-b3.bin"), b3_words(n_extra))
+            else:
+                arr = load_device(_table_file(tables, f"prune-ud-{ek.name}-blk.bin"), block_words(n_extra))
+            self.extra.append((ek, arr))
+        self.extra_kind = self.extra[0][0] if extra_kind is not None else None
         self.sconst = cp.asarray(np.frombuffer(search_const(), dtype=np.uint8))
         self.prefix_len = prefix_len
         self.prefixes = {k: cp.asarray(canonical_prefixes(k)) for k in range(prefix_len + 1)}
+        # Work items are the canonical move sequences of one length.  A round of billions of
+        # nodes needs finer items, or a few large subtrees keep most of the GPU idle (superflip:
+        # 0.5 G nodes/s with 4-move items, 2.4 G/s with 6); a small round pays for every item.
+        # So a cube whose last round reached these node counts gets longer prefixes.
+        self.deeper_prefix_at = deeper_prefix_at
         # Persistent kernel: 8 blocks per SM is enough to keep every SM fed on any device.
         sms = cp.cuda.Device().attributes["MultiProcessorCount"]
         self.grid, self.block = grid or 8 * sms, block
@@ -142,13 +204,24 @@ class GpuSolver:
             self.k_search = mod.get_function(f"search_multi{len(self.extra)}")
         elif mode == "step":
             defines = ("STEP_ALL_BLOCK", f"STEP_EXTRA={len(self.extra)}") + tuple(step_defines)
+            if kind != "208":
+                defines += self.kind.defines
+            if table_format == "b3":
+                defines += ("TABLE_B3",)
             if table_format == "bit":
                 defines += ("TABLE_BIT",)
-            self.k_search = module(*defines).get_function("search_step")
+            if self.extra_kind is not None:
+                defines += ("EXTRA1_KIND=3", f"EXTRA_GEN_NEC={self.extra_kind.nec}")
+            step_mod = module(*defines)
+            if self.extra_kind is not None:
+                gen_class = cp.ndarray((384,), cp.uint16, step_mod.get_global("EXTRA_GEN_CLASS"))
+                gen_class[...] = cp.asarray(self.extra_kind.gen[0])
+            self.k_search = step_mod.get_function("search_step")
         else:
             self.k_search = mod.get_function("search_bidir" if mode == "bidir" else f"search{self.n_frames}")
         self.k_root = mod.get_function("root_distance")
-        self.k_block = mod.get_function("probe_block")
+        probe_defines = (self.kind.defines if kind != "208" else ()) + (("TABLE_B3",) if table_format == "b3" else ())
+        self.k_block = module(*probe_defines).get_function("probe_block")
 
     def root_h(self, states: list[CubieState]) -> np.ndarray:
         cp = self.cp
@@ -167,8 +240,11 @@ class GpuSolver:
                          (self.dt.tables, self.blk, self.dt.classidx, d_words, np.int32(n), out))
             for kind, blk in self.extra:
                 extra = cp.zeros(n, dtype=cp.uint32)
-                module(*kind.defines).get_function("probe_block")(
-                    ((n + 127) // 128,), (128,), (self.dt.tables, blk, self.dt.classidx, d_words, np.int32(n), extra))
+                gen = getattr(kind, "gen", None)
+                tables = DeviceTables(gen).tables if gen is not None else self.dt.tables  # its own classes
+                fmt = ("TABLE_B3",) if self.table_format == "b3" else ()
+                module(*kind.defines, *fmt).get_function("probe_block")(
+                    ((n + 127) // 128,), (128,), (tables, blk, self.dt.classidx, d_words, np.int32(n), extra))
                 out = cp.maximum(out, extra)
         else:
             self.k_root(((n + 127) // 128,), (128,),
@@ -198,9 +274,13 @@ class GpuSolver:
             host_jobs = d_jobs.get().view(JOB_DTYPE)
             groups: dict[int, list[int]] = {}
             for i in active:
-                groups.setdefault(min(int(host_jobs["bound"][i]), self.prefix_len), []).append(i)
+                last = history[i][-1][1] if history[i] else 0
+                plen = self.prefix_len + sum(last >= t for t in self.deeper_prefix_at)
+                groups.setdefault(min(int(host_jobs["bound"][i]), plen), []).append(i)
             for plen, ids in groups.items():
                 counter.fill(0)
+                if plen not in self.prefixes:
+                    self.prefixes[plen] = cp.asarray(canonical_prefixes(plen))
                 pre = self.prefixes[plen]
                 if self.mode == "multi":
                     xs = [blk for _, blk in self.extra] + [self.blk] * (2 - len(self.extra))

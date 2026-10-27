@@ -42,11 +42,49 @@ def block_words(n_entries: int) -> int:
     return -(-n_entries // BLOCK_ENTRIES) * 8
 
 
-def generate(dt: DeviceTables, kind: coords.EdgeKind = coords.K208, log=print):
+B3_ENTRIES = 155
+
+
+def b3_words(n_entries: int) -> int:
+    return -(-n_entries // B3_ENTRIES) * 8
+
+
+def build_b3_table(table_dir: Path, kind=coords.K208, dt: DeviceTables | None = None, log=print) -> Path:
+    """Base-3 block table (155 entries per 32-byte sector, kernel define TABLE_B3)
+    from the mod-3 and 2-bit block tables of ``kind`` (both must exist)."""
+
+    dt = dt or DeviceTables()
+    n_entries = dt.n_classes * kind.n_edge
+    mod3 = load_device(table_dir / f"prune-ud-{kind.name}.bin", (n_entries + 15) // 16)
+    blk = load_device(table_dir / f"prune-ud-{kind.name}-blk.bin", block_words(n_entries))
+    path = table_dir / f"prune-ud-{kind.name}-b3.bin"
+    write_b3(mod3, blk, n_entries, path)
+    log(f"{path}: {path.stat().st_size / 1e9:.2f} GB")
+    return path
+
+
+def write_b3(mod3, blk, n_entries: int, path: Path) -> None:
+    """Write the base-3 table of device tables ``mod3`` and ``blk`` to ``path`` in chunks."""
+
+    import cupy as cp
+
+    n_blocks = -(-n_entries // B3_ENTRIES)
+    kern = module().get_function("build_b3")
+    chunk = CHUNK_WORDS // 8
+    out = cp.empty(chunk * 8, dtype=cp.uint32)
+    with open(path, "wb") as fh:
+        for b0 in range(0, n_blocks, chunk):
+            n = min(chunk, n_blocks - b0)
+            kern(((n + 127) // 128,), (128,), (mod3, blk, np.uint64(b0), np.uint64(n), np.uint64(n_entries), out))
+            out[:n * 8].get().tofile(fh)
+
+
+def generate(dt: DeviceTables, kind: coords.EdgeKind = coords.K208, log=print, with_block: bool = True):
     """Return (mod-3 table, block table, per-depth counts).
 
     Counts are table entries.  The block table stores, per 32-byte sector,
     a minimum depth and 124 two-bit offsets from it (3 = at least +3).
+    Without ``with_block`` only the mod-3 table is built (block table None).
     """
 
     import cupy as cp
@@ -54,9 +92,13 @@ def generate(dt: DeviceTables, kind: coords.EdgeKind = coords.K208, log=print):
     n_entries = dt.n_classes * kind.n_edge
     n_words = (n_entries + 15) // 16
     table = cp.full(n_words, 0xFFFFFFFF, dtype=cp.uint32)
-    blk = cp.zeros(block_words(n_entries), dtype=cp.uint32)
-    blk[::8] = 0xFF
-    mod = module(*kind.defines)
+    if with_block:
+        blk = cp.zeros(block_words(n_entries), dtype=cp.uint32)
+        blk[::8] = 0xFF
+        mod = module(*kind.defines)
+    else:
+        blk = cp.zeros(8, dtype=cp.uint32)
+        mod = module(*kind.defines, "NO_BLOCK_TABLE")
     counter32 = cp.zeros(1, dtype=cp.uint32)
     mod.get_function("seed_solved")((1,), (32,), (dt.tables, table, blk, dt.classidx, dt.class_stab, counter32))
     counts = [int(counter32[0])]
@@ -84,7 +126,7 @@ def generate(dt: DeviceTables, kind: coords.EdgeKind = coords.K208, log=print):
         counts.append(found)
         remaining -= found
         depth += 1
-    return table, blk, counts
+    return table, blk if with_block else None, counts
 
 
 def histogram(table, n_entries: int) -> list[int]:
@@ -122,6 +164,39 @@ def build(out_dir: Path, kind: coords.EdgeKind = coords.K208, log=print) -> Path
         "seconds": round(elapsed, 1),
     }
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2) + "\n")
+    return path
+
+
+def build_preset(out_dir: Path, preset, log=print) -> Path:
+    """Generate a ``kinds.Preset`` table and write only its solving file (block or base 3)."""
+
+    import cupy as cp
+
+    from cuda_cube_solver import kinds
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    kind = kinds.get(preset.kind)
+    dt = DeviceTables(getattr(kind, "gen", None))
+    t = time.perf_counter()
+    table, blk, counts = generate(dt, kind, log)
+    n_entries = dt.n_classes * kind.n_edge
+    hist = histogram(table, n_entries)
+    expected = [sum(counts[d] for d in range(r, len(counts), 3)) for r in range(3)] + [0]
+    if hist != expected:
+        raise AssertionError(f"histogram {hist} != depth counts {expected}")
+    max_min = max(int((blk[start:start + CHUNK_WORDS:8] & 0xFF).max()) for start in range(0, len(blk), CHUNK_WORDS))
+    if max_min >= len(counts):
+        raise AssertionError("block table has an unset block minimum")
+    path = out_dir / preset.file
+    tmp = path.with_suffix(".tmp")  # a crash mid-write must not leave a table that looks complete
+    if preset.format == "b3":
+        write_b3(table, blk, n_entries, tmp)
+    else:
+        save_device(blk, tmp)
+    del table, blk
+    cp.get_default_memory_pool().free_all_blocks()
+    tmp.rename(path)
+    kinds.write_meta(path.with_suffix(".json"), preset, counts, time.perf_counter() - t)
     return path
 
 

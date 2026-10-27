@@ -20,7 +20,7 @@ def main():
     args = ap.parse_args()
     lines = Path("data/random1000.txt").read_text().splitlines()[: args.count]
     cubes = [apply_moves(CubieState(), [MOVES_HTM[m] for m in parse_moves(l)]) for l in lines]
-    s = GpuSolver(Path("tables"))
+    s = GpuSolver(Path("tables"), kind="d4t")
     kern = module(*args.define).get_function(args.kernel)
     h, words = s.root_h(cubes)
     jobs = np.zeros(len(cubes), dtype=JOB_DTYPE)

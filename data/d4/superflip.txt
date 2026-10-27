@@ -1,0 +1,1 @@
+0 3.220 20 U R U2 R F2 L U2 R F' B' R2 D R' L U2 F2 D2 F R2 D

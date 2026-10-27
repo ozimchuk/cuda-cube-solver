@@ -1,0 +1,9 @@
+304 block 1000 cubes in 165.82s = 6.031 cubes/s, 1.644 G nodes/s, 272.6 M nodes/cube
+g1-49 b3 1000 cubes in 76.46s = 13.079 cubes/s, 1.603 G nodes/s, 122.5 M nodes/cube
+g1-49 block 1000 cubes in 73.63s = 13.581 cubes/s, 1.644 G nodes/s, 121.0 M nodes/cube
+g1-43 b3 1000 cubes in 59.20s = 16.891 cubes/s, 1.511 G nodes/s, 89.5 M nodes/cube
+g1-43 block 1000 cubes in 57.96s = 17.253 cubes/s, 1.493 G nodes/s, 86.5 M nodes/cube
+g1-31 b3 1000 cubes in 45.90s = 21.784 cubes/s, 1.481 G nodes/s, 68.0 M nodes/cube
+g1-31 block 1000 cubes in 41.49s = 24.100 cubes/s, 1.543 G nodes/s, 64.0 M nodes/cube
+g1-27 b3 1000 cubes in 28.39s = 35.224 cubes/s, 1.433 G nodes/s, 40.7 M nodes/cube
+g1-27 block 1000 cubes in 26.93s = 37.136 cubes/s, 1.452 G nodes/s, 39.1 M nodes/cube

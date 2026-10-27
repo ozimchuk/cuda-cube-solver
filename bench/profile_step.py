@@ -19,7 +19,7 @@ BOUND = int(sys.argv[2]) if len(sys.argv) > 2 else 16
 def main():
     lines = Path("data/random1000.txt").read_text().splitlines()[:COUNT]
     cubes = [apply_moves(CubieState(), [MOVES_HTM[m] for m in parse_moves(l)]) for l in lines]
-    s = GpuSolver(Path("tables"))
+    s = GpuSolver(Path("tables"), kind="d4t")
     h, words = s.root_h(cubes)
     jobs = np.zeros(len(cubes), dtype=JOB_DTYPE)
     jobs["frame"] = words
